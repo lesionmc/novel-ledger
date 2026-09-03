@@ -1,0 +1,19 @@
+# 本地密钥与配置，绝不入库
+.env
+*.env
+!*.env.example
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# 用户书稿数据（本地私有）：章节正文与一切机器产物不入库
+**/chapters/
+*.bak.md
+books/*/versions/
+
+# 系统
+.DS_Store
+Thumbs.db

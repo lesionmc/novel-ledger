@@ -1,0 +1,8 @@
+# 统一换行符，避免 Windows/Unix 协作时的 CRLF/LF 噪音
+* text=auto
+*.md text eol=lf
+*.py text eol=lf
+*.json text eol=lf
+*.example text eol=lf
+*.gitignore text eol=lf
+.gitattributes text eol=lf

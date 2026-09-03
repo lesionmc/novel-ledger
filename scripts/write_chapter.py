@@ -410,8 +410,8 @@ def main() -> int:
         return 1
 
     # 配置生效链：命令行 > .env > 内置默认（.env 换厂商必须真正生效）
-    base_url = base_url or env_or("AGNES_BASE_URL", "AGNES_BASE_URL", DEFAULT_BASE_URL)
-    model = model or env_or("AGNES_MODEL", "AGNES_MODEL", DEFAULT_MODEL)
+    base_url = args.base_url if args.base_url else env_or("AGNES_BASE_URL", "AGNES_BASE_URL", DEFAULT_BASE_URL)
+    model = args.model if args.model else env_or("AGNES_MODEL", "AGNES_MODEL", DEFAULT_MODEL)
 
     book_dir = os.path.abspath(args.book) if args.book else ""
     if not book_dir or not os.path.exists(book_dir):

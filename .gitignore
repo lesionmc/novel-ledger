@@ -17,3 +17,7 @@ books/*/versions/
 # 系统
 .DS_Store
 Thumbs.db
+
+# 归档物（残留测试书/旧版备份/损坏账本留档）不入版本库
+books/_archive/
+**/_archive/

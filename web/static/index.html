@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>novel-ledger · 小说写作工作台</title>
+<link rel="stylesheet" href="static/style.css">
+</head>
+<body>
+<header>
+  <button id="homeBtn" class="icon-btn" title="返回首页" onclick="window.novelApp.goHome()">🏠</button>
+  <div class="brand">📖 <span class="name">novel-ledger</span><span class="tag">写作工作台</span></div>
+  <div class="hdr-spacer"></div>
+  <span id="keyPill" class="pill warn" title="API Key 状态">检查中…</span>
+  <button id="settingsBtn" class="icon-btn" title="设置">⚙</button>
+  <button id="newBookBtn" class="btn primary sm">+ 新建书</button>
+</header>
+
+<div class="main">
+  <aside id="sidebar">
+    <div class="side-section">
+      <div class="side-title">📚 我的书</div>
+      <div class="tree" id="bookTree"><div class="muted" style="padding:6px 10px">加载中…</div></div>
+    </div>
+    <div class="side-section" id="chapterSection" style="display:none">
+      <div class="side-title">📑 章节 <span id="chapterCount" class="muted"></span></div>
+      <div class="tree" id="chapterTree"></div>
+    </div>
+    <div class="side-section" id="reportSection" style="display:none">
+      <div class="side-title">🧾 报告/产物</div>
+      <div class="tree" id="reportTree"></div>
+    </div>
+    <div class="side-foot">
+      <button class="btn ghost" onclick="window.novelApp.refreshAll()">⟳ 刷新</button>
+    </div>
+  </aside>
+
+  <main id="main">
+    <!-- 主页 hero（未选书时显示）-->
+    <div id="hero" class="hero">
+      <h1>📖 novel-ledger</h1>
+      <p class="muted">中文 AI 小说共创写作台 · 长篇防穿帮 + 去 AI 腔 + 自动审计</p>
+      <div class="hero-cards">
+        <div class="hero-card primary" id="cardNewBook">
+          <div class="hc-icon">✨</div>
+          <div class="hc-title">和 AI 聊天创建新书</div>
+          <div class="hc-desc">讲出你的故事想法，AI 帮你生成设定/角色/大纲，再一键创建</div>
+          <button class="btn primary">开始 →</button>
+        </div>
+        <div class="hero-card" id="cardSample">
+          <div class="hc-icon">📚</div>
+          <div class="hc-title">从模板复制空书</div>
+          <div class="hc-desc">复制示例书《雾城档案》三件套，自己改内容</div>
+          <button class="btn">复制模板 →</button>
+        </div>
+        <div class="hero-card" id="cardDocs">
+          <div class="hc-icon">📖</div>
+          <div class="hc-title">查看使用文档</div>
+          <div class="hc-desc">README + 命令手册 + 踩过的坑</div>
+          <a class="btn" href="https://github.com/lesionmc/novel-ledger" target="_blank">去 GitHub →</a>
+        </div>
+      </div>
+      <div id="bookListHome" class="book-cards"></div>
+    </div>
+
+    <!-- 工作区 -->
+    <div id="work" class="work hidden">
+      <div class="work-top">
+        <div class="file-title" id="fileTitle"></div>
+        <div class="actions" id="actions"></div>
+      </div>
+      <div class="work-body" id="workBody"></div>
+    </div>
+  </main>
+</div>
+
+<!-- 新建书向导：：模态 -->
+<div id="modal" class="modal hidden">
+  <div class="modal-box wide" id="modalBox">
+    <div class="modal-head">
+      <div class="mh-title" id="modalTitle">新建书</div>
+      <button class="icon-btn" onclick="window.novelApp.closeModal()">×</button>
+    </div>
+    <div class="modal-body" id="modalBody"></div>
+    <div class="modal-foot" id="modalFoot"></div>
+  </div>
+</div>
+
+<div id="toast" class="toast hidden"></div>
+<div id="statusBar" class="status-bar">
+  <span class="sb-dot" id="sbDot">●</span>
+  <span id="sbText">未连接</span>
+  <span class="sb-log" id="sbLog"></span>
+</div>
+<script src="static/app.js"></script>
+</body>
+</html>

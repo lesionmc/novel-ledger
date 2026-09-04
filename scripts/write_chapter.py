@@ -239,7 +239,7 @@ def call_llm(api_key: str, base_url: str, model: str, user_content: str,
              reasoning_effort: str = "low", max_retries: int = 2,
              system_prompt: str = SYSTEM_PROMPT, *,
              fallback_key: str = None, fallback_base_url: str = None,
-             fallback_model: str = None) -> str:
+             fallback_model: str = None, usage_meta: dict = None) -> str:
     """调用 chat completion（OpenAI 兼容），返回正文。
     注：
     - agnes-2.5-flash 带推理，长上下文+长创作下 reasoning 会失控吞光预算，
@@ -247,6 +247,7 @@ def call_llm(api_key: str, base_url: str, model: str, user_content: str,
     - max_tokens 默认 12000，避免正文被截断。
     - 防单点故障：主模型连续失败（网络/限流/空内容）后自动切备用通道；
       备用通道优先级：显式参数 > .env 的 FALLBACK_API_KEY/FALLBACK_BASE_URL/FALLBACK_MODEL。
+    - usage_meta={"action","book","chapter"}：传了就顺带记用量流水（R48），失败不影响主流程。
     对空内容/限流做有限重试，不再静默吞错。"""
     import time
 
@@ -287,6 +288,16 @@ def call_llm(api_key: str, base_url: str, model: str, user_content: str,
                 f"总 {usage.get('total_tokens', '?')} tokens | finish={finish}",
                 file=sys.stderr,
             )
+            if usage:
+                try:
+                    import usage_log
+                    m = usage_meta or {}
+                    usage_log.log_usage(m.get("action", "写章"), ch_model,
+                                        usage.get("prompt_tokens"),
+                                        usage.get("completion_tokens"),
+                                        book=m.get("book", ""), chapter=m.get("chapter"))
+                except Exception:
+                    pass  # 记账失败绝不影响写章主流程（R48 设计约束）
             if content.strip():
                 return content.strip()
             last_err = f"空内容（finish_reason={finish}）"
@@ -308,7 +319,8 @@ def call_llm(api_key: str, base_url: str, model: str, user_content: str,
 
 
 def update_state(api_key: str, base_url: str, model: str, body: str,
-                 old_state: str, reasoning_effort: str = "low") -> str:
+                 old_state: str, reasoning_effort: str = "low",
+                 usage_meta: dict = None) -> str:
     """滚动账本更新：模型读"旧账 + 本章正文"输出完整新账（覆盖式重写）。
     P1 记忆中枢核心：计数核对（回闪次数）、时间推进、伏笔状态、物件防漂移都靠它。
     注（ch4 实测修复）：正文过长会把请求输入顶过 ~5k tokens，触发 agnes-2.5-flash
@@ -326,6 +338,7 @@ def update_state(api_key: str, base_url: str, model: str, body: str,
         temperature=0.2, max_tokens=12000, reasoning_effort=reasoning_effort,
         system_prompt="你是严谨的故事状态账本维护程序，严格按用户给出的模板结构与规则输出完整账本全文，不要输出正文以外的东西。",
         max_retries=3,
+        usage_meta=usage_meta,
     )
 
 
@@ -351,6 +364,7 @@ def init_state(api_key: str, base_url: str, model: str, book_dir: str,
         temperature=0.2, max_tokens=4000, reasoning_effort=reasoning_effort,
         system_prompt="你是严谨的故事状态账本初始化程序。",
         max_retries=3,
+        usage_meta={"action": "建账", "book": book_name},
     )
 
 
@@ -392,6 +406,8 @@ def audit_chapter(api_key: str, base_url: str, model: str, book_dir: str,
         temperature=0.1, max_tokens=12000, reasoning_effort=reasoning_effort,
         system_prompt="你是严谨的小说一致性审计员，只输出审计清单。",
         max_retries=3,
+        usage_meta={"action": "审计", "book": os.path.basename(book_dir.rstrip("/\\")),
+                    "chapter": chapter},
     ).strip()
     out = os.path.join(out_dir, f"ch{chapter:03d}.一致性审计.md")
     with open(out, "w", encoding="utf-8") as f:
@@ -472,7 +488,9 @@ def main() -> int:
         body = read_text(src)
         print(f"[state] 基于 ch{args.chapter:03d}.md（{len(body)} 字）重算账本...")
         new_state = update_state(api_key, base_url, model, body,
-                                 old_state, reasoning_effort=args.reasoning_effort)
+                                 old_state, reasoning_effort=args.reasoning_effort,
+                                 usage_meta={"action": "账本更新", "book": book_name,
+                                             "chapter": args.chapter})
         with open(state_path, "w", encoding="utf-8") as f:
             f.write(new_state)
         print(f"[state] 账本已更新 → {state_path}")
@@ -489,7 +507,8 @@ def main() -> int:
 
     print(f"[2/4] 调用 {model} 生成正文...")
     body = call_llm(api_key, base_url, model, context,
-                    reasoning_effort=args.reasoning_effort)
+                    reasoning_effort=args.reasoning_effort,
+                    usage_meta={"action": "写正文", "book": book_name, "chapter": args.chapter})
     body = body.strip()
 
     out_file = os.path.join(out_dir, f"ch{args.chapter:03d}.md")
@@ -501,7 +520,9 @@ def main() -> int:
         print("     更新滚动账本（记忆回填）...")
         new_state = update_state(api_key, base_url, model, body,
                                  read_text(state_path),
-                                 reasoning_effort=args.reasoning_effort)
+                                 reasoning_effort=args.reasoning_effort,
+                                 usage_meta={"action": "账本更新", "book": book_name,
+                                             "chapter": args.chapter})
         with open(state_path, "w", encoding="utf-8") as f:
             f.write(new_state)
         print(f"     账本已更新 → {state_path}")

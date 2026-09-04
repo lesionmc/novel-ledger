@@ -58,10 +58,12 @@ def env_or(key_env, key_dotenv, default):
 def call_llm(api_key, base_url, model, user_content, temperature=0.2,
              max_tokens=4000, reasoning_effort="low", max_retries=2,
              system_prompt=None, *,
-             fallback_key=None, fallback_base_url=None, fallback_model=None):
+             fallback_key=None, fallback_base_url=None, fallback_model=None,
+             usage_meta=None):
     """调用 chat completion（OpenAI 兼容），返回正文文本。
     与 write_chapter.py 同款：reasoning_effort=low 抑制 agnes 推理失控；空内容报警重试。
-    防单点故障：主模型连续失败后自动切备用通道（参数 > .env 的 FALLBACK_API_KEY 等）。"""
+    防单点故障：主模型连续失败后自动切备用通道（参数 > .env 的 FALLBACK_API_KEY 等）。
+    usage_meta={"action","book","chapter"}：传了就顺带记用量流水（R48），失败不影响主流程。"""
     payload = {
         "model": model,
         "messages": [
@@ -100,6 +102,16 @@ def call_llm(api_key, base_url, model, user_content, temperature=0.2,
                 print(f"[用量] 输入 {usage.get('prompt_tokens', '?')} / 输出 "
                       f"{usage.get('completion_tokens', '?')} / 总 {usage.get('total_tokens', '?')} tokens | "
                       f"finish={finish}")
+                if usage:
+                    try:
+                        import usage_log
+                        m = usage_meta or {}
+                        usage_log.log_usage(m.get("action", "去味"), ch_model,
+                                            usage.get("prompt_tokens"),
+                                            usage.get("completion_tokens"),
+                                            book=m.get("book", ""), chapter=m.get("chapter"))
+                    except Exception:
+                        pass  # 记账失败绝不影响主流程（R48 设计约束）
                 content = (choice.get("message") or {}).get("content") or ""
                 content = content.strip()
                 if not content:
@@ -410,7 +422,10 @@ def polish_chapter(book_dir, chapter, api_key, base_url, model, reasoning_effort
     raw = call_llm(api_key, base_url, model, prompt,
                    temperature=0.2, max_tokens=6000,
                    reasoning_effort=reasoning_effort,
-                   system_prompt=L2_SYSTEM)
+                   system_prompt=L2_SYSTEM,
+                   usage_meta={"action": "去味精判",
+                               "book": os.path.basename(book_dir.rstrip("/\\")),
+                               "chapter": int(chapter)})
     try:
         verdicts = json.loads(raw)
     except json.JSONDecodeError:

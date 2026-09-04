@@ -296,6 +296,12 @@ function setActions(list) {
   for (const b of list) { const btn = document.createElement("button"); btn.className = "btn " + (b.cls || ""); btn.textContent = b.label; btn.onclick = b.handler; a.appendChild(btn); }
 }
 
+/* R48：从引擎日志里抠出「本次消耗」，给写章/审计/去味的完成提示用 */
+function usageFromLog(log) {
+  const m = (log || "").match(/\[用量\] 输入 (\d+) \/ 输出 (\d+) \/ 总 (\d+) tokens/);
+  return m ? { in: +m[1], out: +m[2], total: +m[3] } : null;
+}
+
 async function writeNext() {
   if (!confirm("写下一章会调模型生成约 3000 字并更新记忆账本，约 1-3 分钟。开始？")) return;
   await saveCurrent(true); busy("模型写作中（约 1-3 分钟，请勿关闭页面）…");
@@ -303,7 +309,10 @@ async function writeNext() {
   try {
     const d = await API.post(`/api/book/${encodeURIComponent(state.currentBook)}/write`, {});
     if (!d.ok) { showLog(d.log || "引擎失败"); statusBar("err", "写章失败", ""); toast("写章失败", "err"); return; }
-    toast(`✅ 第 ${d.no} 章（${d.chars} 字）`, "ok"); statusBar("ok", `第 ${d.no} 章已生成（${d.chars} 字）`, "");
+    const u = usageFromLog(d.log);
+    toast(`✅ 第 ${d.no} 章（${d.chars} 字）` + (u ? ` · 消耗 ${u.total} tokens` : ""), "ok");
+    statusBar("ok", `第 ${d.no} 章已生成（${d.chars} 字）`,
+              u ? `本次消耗 ${u.total} tokens（输入 ${u.in} / 输出 ${u.out}）` : "");
     await openChapter(d.no); refreshAll();
   } catch (e) { toast("写章失败：" + e.message, "err"); statusBar("err", "写章失败", e.message); }
   finally { idle(); }
@@ -314,7 +323,9 @@ async function auditChapter(n) {
     const d = await API.post(`/api/book/${encodeURIComponent(state.currentBook)}/audit`, { no: n });
     if (!d.ok && !d.report) { showLog(d.log); toast("审计失败", "err"); return; }
     await openReport(`chapters/ch${String(n).padStart(3, "0")}.一致性审计.md`);
-    toast("审计完成", "ok"); statusBar("ok", "审计完成", "");
+    const ua = usageFromLog(d.log);
+    toast("审计完成" + (ua ? ` · 消耗 ${ua.total} tokens` : ""), "ok");
+    statusBar("ok", "审计完成", ua ? `本次消耗 ${ua.total} tokens（输入 ${ua.in} / 输出 ${ua.out}）` : "");
   } catch (e) { toast("审计失败：" + e.message, "err"); statusBar("err", "审计失败", e.message); }
   finally { idle(); }
 }
@@ -335,7 +346,10 @@ async function polish(n) {
     const d = await API.post(`/api/book/${encodeURIComponent(state.currentBook)}/polish`, { no: n });
     if (!d.ok) { showLog(d.log); toast("去味失败", "err"); return; }
     await openReport(`chapters/ch${String(n).padStart(3, "0")}.AI腔体检.md`);
-    toast("体检报告已出（diff 报告在左侧）", "ok"); refreshAll();
+    const up = usageFromLog(d.log);
+    toast("体检报告已出（diff 报告在左侧）" + (up ? ` · 消耗 ${up.total} tokens` : ""), "ok");
+    if (up) statusBar("ok", "去味完成", `本次消耗 ${up.total} tokens（输入 ${up.in} / 输出 ${up.out}）`);
+    refreshAll();
   } catch (e) { toast("去味失败：" + e.message, "err"); }
   finally { idle(); }
 }
@@ -376,6 +390,7 @@ function openSettings() {
     </div>
     <style>.form-section{margin-bottom:4px} .form-section h4{margin:0 0 6px;color:var(--brand);font-size:13px} .form-section label{display:block;margin-bottom:6px;font-size:12px;color:var(--ink-soft)} .form-section input{margin-top:2px}</style>
     `, `<button class="btn" onclick="window.novelApp.closeModal()">取消</button>
+    <button class="btn" onclick="window.novelApp.openUsage()">📊 用量</button>
     <button class="btn" onclick="window.novelApp.testConn()">🔌 测试连接</button>
     <button class="btn primary" onclick="window.novelApp.saveSettings()">💾 保存</button>`);
   });
@@ -595,8 +610,41 @@ async function createBookFromTemplate() {
   } catch (e) { toast("创建失败：" + e.message, "err"); }
 }
 
+/* ---------------- 用量统计（R48） ---------------- */
+async function openUsage() {
+  try {
+    const r = await API.get("/api/usage");
+    const s = r.summary || {};
+    const days = Object.entries(s.by_day || {}).sort((a, b) => (a[0] < b[0] ? 1 : -1))
+      .map(([d, v]) => `<tr><td>${esc(d)}</td><td>${v.calls}</td><td>${v.total}</td></tr>`).join("");
+    const chs = (s.chapters || []).slice(-20).reverse()
+      .map((c) => `<tr><td>${esc(c.book || "-")}</td><td>${c.chapter ? "ch" + String(c.chapter).padStart(3, "0") : "-"}</td><td>${c.total}</td></tr>`).join("");
+    openModal("📊 模型用量（本地流水 · 不查厂商 · 不折算钱）", `
+      <div class="usage-cards">
+        <div class="u-card"><div class="u-num">${s.total ?? 0}</div><div class="u-lab">累计 tokens</div></div>
+        <div class="u-card"><div class="u-num">${s.calls ?? 0}</div><div class="u-lab">调用次数</div></div>
+        <div class="u-card"><div class="u-num">${s.write_avg ?? "—"}</div><div class="u-lab">平均每章 tokens</div></div>
+        <div class="u-card"><div class="u-num">${s.write_count ?? 0}</div><div class="u-lab">已写章数</div></div>
+      </div>
+      <h4 class="u-h">按天汇总</h4>
+      <table class="usage-t"><tr><th>日期</th><th>次数</th><th>tokens</th></tr>${days || '<tr><td colspan="3" class="muted">暂无记录</td></tr>'}</table>
+      <h4 class="u-h">每章消耗（最近 20 章）</h4>
+      <table class="usage-t"><tr><th>书</th><th>章</th><th>tokens</th></tr>${chs || '<tr><td colspan="3" class="muted">暂无记录</td></tr>'}</table>
+      <style>
+        .usage-cards{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:12px}
+        .u-card{background:var(--brand-bg);border:1px solid var(--brand-2);border-radius:8px;padding:10px;text-align:center}
+        .u-num{font-size:18px;font-weight:700;color:var(--brand)}
+        .u-lab{font-size:11px;color:var(--ink-soft)}
+        .u-h{margin:12px 0 6px;color:var(--brand);font-size:13px}
+        .usage-t{width:100%;border-collapse:collapse;font-size:12.5px}
+        .usage-t td,.usage-t th{border:1px solid var(--line);padding:4px 8px;text-align:left}
+      </style>
+    `, `<button class="btn" onclick="window.novelApp.closeModal()">关闭</button>`);
+  } catch (e) { toast("读取用量失败：" + e.message, "err"); }
+}
+
 /* ---------------- 入口 ---------------- */
-window.novelApp = { refreshAll, goHome, closeModal, saveSettings, testConn, genBrief, genFiles, createBookFromChat, sendChat };
+window.novelApp = { refreshAll, goHome, closeModal, saveSettings, testConn, genBrief, genFiles, createBookFromChat, sendChat, openUsage };
 window.addEventListener("keydown", (e) => {
   if ((e.ctrlKey || e.metaKey) && e.key === "s") { e.preventDefault(); saveCurrent(false); }
 });

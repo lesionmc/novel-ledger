@@ -209,6 +209,32 @@ try:
 finally:
     _ur.urlopen = _real_urlopen
 
+# ── 7. 用量记账（R48） ─────────────────────────────────────────
+print("\n== 7. 用量记账 ==")
+import usage_log  # noqa: E402
+
+_tmpdir = tempfile.mkdtemp(prefix="usage_")
+_upath = os.path.join(_tmpdir, "usage_log.jsonl")
+try:
+    e1 = usage_log.log_usage("写正文", "模型A", 3000, 3000, book="测试书", chapter=1, path=_upath)
+    e2 = usage_log.log_usage("账本更新", "模型A", 2000, 1500, book="测试书", chapter=1, path=_upath)
+    usage_log.log_usage("坏数据", "模型B", "abc", None, path=_upath)  # 非 token 数字不炸
+    with open(_upath, "a", encoding="utf-8") as f:
+        f.write("这行不是JSON\n")
+    entries = usage_log.load_entries(path=_upath)
+    check("流水写入与容错读取（3 行合法 + 坏行跳过）", len(entries) == 3, str(len(entries)))
+    agg = usage_log.aggregate(entries)
+    check("汇总：总量=9500 且按天/按动作齐备",
+          agg["total"] == 9500 and agg["calls"] == 3
+          and "写正文" in agg["by_action"] and len(agg["by_day"]) >= 1, str(agg)[:160])
+    check("写章平均：仅按「写正文」计（1 章 6000）",
+          agg["write_count"] == 1 and agg["write_avg"] == 6000,
+          f'count={agg["write_count"]} avg={agg["write_avg"]}')
+    check("log_usage 失败不抛异常（坏路径返回 None）",
+          usage_log.log_usage("x", "y", 1, 2, path=os.path.join(_tmpdir, "no_dir", "a.jsonl")) is None)
+finally:
+    shutil.rmtree(_tmpdir, ignore_errors=True)
+
 # ── 汇总 ───────────────────────────────────────────────────────
 print(f"\n{'=' * 40}\n结果：{PASS} 通过 / {FAIL} 失败")
 if FAIL:

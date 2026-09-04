@@ -45,6 +45,7 @@ SAMPLE_DIR = os.path.join(ROOT, "sample_book")
 SCRIPTS_DIR = os.path.join(ROOT, "scripts")
 WEB_DIR = os.path.join(ROOT, "web")
 ENV_PATH = os.path.join(ROOT, ".env")
+sys.path.insert(0, SCRIPTS_DIR)  # 让 server 可直接 import 引擎侧公共模块（usage_log 等，R48）
 
 WRITE_CH = os.path.join(SCRIPTS_DIR, "write_chapter.py")
 DEAI = os.path.join(SCRIPTS_DIR, "deai.py")
@@ -137,8 +138,9 @@ def live_env():
     }
 
 
-def llm_chat(messages, temperature=0.7, max_tokens=2000):
-    """用配置的模型做一次 chat（供对话建书/测试连接用）。返回文本。"""
+def llm_chat(messages, temperature=0.7, max_tokens=2000, action="Web对话"):
+    """用配置的模型做一次 chat（供对话建书/测试连接用）。返回文本。
+    R48：响应带 usage 时顺带记用量流水，记账失败不影响返回。"""
     cfg = live_env()
     if not cfg["key"]:
         raise RuntimeError("未配置 AGNES_API_KEY（请在 ⚙ 设置 里填写）")
@@ -158,6 +160,14 @@ def llm_chat(messages, temperature=0.7, max_tokens=2000):
                       method="POST")
     with _ur.urlopen(req, timeout=240) as resp:
         data = json.loads(resp.read().decode("utf-8"))
+    u = data.get("usage") or {}
+    if u:
+        try:
+            import usage_log
+            usage_log.log_usage(action, cfg["model"],
+                                u.get("prompt_tokens"), u.get("completion_tokens"))
+        except Exception:
+            pass  # 记账失败不影响对话（R48 设计约束）
     choice = (data.get("choices") or [{}])[0]
     return (choice.get("message") or {}).get("content", "").strip()
 
@@ -328,6 +338,11 @@ class Handler(BaseHTTPRequestHandler):
         if segs == ["settings"]:
             api_ok(self, {"settings": public_settings()})
             return
+        if segs == ["usage"]:
+            # R48 用量记账：读本地流水现算汇总（零成本、零外呼）
+            import usage_log
+            api_ok(self, {"summary": usage_log.aggregate(usage_log.load_entries())})
+            return
         if segs == ["books"]:
             api_ok(self, {"books": list_books()})
             return
@@ -400,7 +415,7 @@ class Handler(BaseHTTPRequestHandler):
                 answer = llm_chat([
                     {"role": "system", "content": "ping"},
                     {"role": "user", "content": "ping"},
-                ], max_tokens=4)
+                ], max_tokens=4, action="连通测试")
                 api_ok(self, {"ok": True, "sample": answer, "model": cfg["model"]})
             except Exception as e:
                 api_error(self, 502, f"连接失败：{e}")

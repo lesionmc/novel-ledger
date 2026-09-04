@@ -3,6 +3,9 @@
 *.env
 !*.env.example
 
+# 模型用量流水（R48，本机数据）
+usage_log.jsonl
+
 # Python
 __pycache__/
 *.pyc

@@ -174,7 +174,8 @@ def list_books():
     if not os.path.isdir(BOOKS_DIR):
         return []
     return sorted(d for d in os.listdir(BOOKS_DIR)
-                  if os.path.isdir(os.path.join(BOOKS_DIR, d)) and not d.startswith("."))
+                  if os.path.isdir(os.path.join(BOOKS_DIR, d))
+                  and not d.startswith(".") and not d.startswith("_"))
 
 
 def chapter_list(p):

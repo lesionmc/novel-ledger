@@ -175,6 +175,17 @@ async function openBook(name) {
 }
 
 /* ---------------- 打开节点 ---------------- */
+function chapterActions() {
+  const no = state.current && state.current.kind === "ch" ? state.current.no : null;
+  return [
+    { label: "✍ 写下一章", cls: "primary", handler: writeNext },
+    { label: "🧾 一致性审计", handler: () => auditChapter(no) },
+    { label: "🔬 全书体检", handler: () => scan() },
+    { label: "🪄 去味精判", handler: () => polish(no) },
+    { label: "✂️ 应用改写", handler: () => apply(no) },
+    { label: "💾 保存", handler: () => saveCurrent(false) },
+  ];
+}
 async function openChapter(no) {
   $$(".tree-node.child").forEach((n) => n.classList.remove("active"));
   const d = await API.get(`/api/book/${encodeURIComponent(state.currentBook)}/ch/${no}`);
@@ -402,7 +413,7 @@ async function saveSettings() {
   } catch (e) { toast("保存失败：" + e.message, "err"); }
 }
 async function testConn() {
-  statusBar("OK", "测试连接中…", "消耗 4 token");
+  statusBar("ok","测试连接中…", "消耗 4 token");
   try {
     const r = await API.post("/api/settings/test", {});
     statusBar("ok", "连接正常 ✅", "模型 " + r.model + " · 示例 " + (r.sample || "（空）"));
@@ -482,7 +493,7 @@ async function sendChat(input) {
   input.value = "";
   renderChat();
   input.disabled = true;
-  statusBar("OK", "AI 正在中中…", "流式生成中");
+  statusBar("ok", "AI 正在回复…", "流式生成中");
   try {
     const r = await fetch("/api/chat", {
       method: "POST",
@@ -507,7 +518,7 @@ async function sendChat(input) {
           if (delta) {
             state.chat.msgs[i].content += delta;
             renderChat();
-            statusBar("OK", "AI 中中中", "+" + state.chat.msgs[i].content.length + " 字");
+            statusBar("ok", "AI 生成中", "+" + state.chat.msgs[i].content.length + " 字");
           }
         } catch (e) {}
       }
@@ -520,9 +531,9 @@ async function sendChat(input) {
   } finally { input.disabled = false; input.focus(); }
 }
 async function genBrief() {
-  const sys = { role: "system", content: "你是中文网文资深策划。阅读对话，提取新书三要素：英文/拼音书名、题材、一一句话一句话。严格返回 JSON：{name, genre, hook}。" };
+  const sys = { role: "system", content: "你是中文网文资深策划。阅读对话，提取新书三要素：英文/拼音书名、题材、一句话卖点。严格返回 JSON：{name, genre, hook}。" };
   const msgs = [sys, ...state.chat.msgs.filter((m) => m.role !== "system")];
-  statusBar("OK", "提取书名中…", "");
+  statusBar("ok","提取书名中…", "");
   try {
     const r = await API.post("/api/chat", { messages: msgs, temperature: 0.4 });
     let parsed = { name: "my_novel", genre: "未指定", hook: "" };
@@ -544,7 +555,7 @@ async function genFiles() {
   if (!state.chat.brief) await genBrief();
   const sys = { role: "system", content: "你是中文网文资深编辑。根据对话 + 简报，直接输出 3 个 markdown 文件内容：\n1) 设定.md（世界观/类型/一句话卖点/硬规则）\n2) 角色卡.md（主角 + 主要对手 + 关键配角，含身份/性格/称呼）\n3) 大纲.md（全书主线 + 第一卷 3-5 章细纲，每章目标/事件/钩子）\n严格用三个 markdown 块，块首分别用 `=== 设定.md ===`、`=== 角色卡.md ===`、`=== 大纲.md ===` 标记。" };
   const msgs = [sys, ...state.chat.msgs.filter((m) => m.role !== "system")];
-  statusBar("OK", "生成三件套中…", "模型设计设定/角色/大纲");
+  statusBar("ok","生成三件套中…", "模型设计设定/角色/大纲");
   try {
     const r = await API.post("/api/chat", { messages: msgs, temperature: 0.6 });
     const text = r.content;
@@ -568,7 +579,7 @@ async function genFiles() {
 async function createBookFromChat() {
   const name = ($("#bookNameInput").value || state.chat.name || "my_novel").trim().replace(/[\\/]/g, "_");
   if (!name || !state.chat.files) { toast("先生成三件套", "warn"); return; }
-  statusBar("OK", "创建中…", name);
+  statusBar("ok","创建中…", name);
   try {
     const r = await API.post("/api/book/from-chat", { name, files: state.chat.files });
     toast("✅ 《" + name + "》已建好并初始化", "ok"); statusBar("ok", "新书已创建", name);

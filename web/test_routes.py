@@ -77,6 +77,8 @@ try:
     check("app.js 是 application/javascript", "javascript" in ctype, ctype)
     check("app.js 不含破损 onlick", '"()' not in body and "大大纲" not in body)
     check("设置页 CSS 无花括号错乱", ".form-section h4{margin" in body and "{form-section" not in body)
+    check("app.js 定义 chapterActions（防 P0-1 复发：章节页动作条空白）", "function chapterActions()" in body)
+    check("app.js 动作条调用与定义匹配", "setActions(chapterActions())" in body)
 
     # 3. 状态接口 + API Key 脱敏
     code, ctype, body = req("GET", "/api/status")
@@ -89,6 +91,8 @@ try:
     code, _, body = req("GET", "/api/books")
     books = json.loads(body).get("books", [])
     check("books 包含《雾城档案》", "雾城档案" in books, str(books))
+    check("books 过滤 _ 开头目录（_archive 不当书列出，防 P0-3 复发）",
+          all(not b.startswith("_") for b in books), str(books))
 
     code, _, body = req("GET", "/api/book/雾城档案")
     detail = json.loads(body)

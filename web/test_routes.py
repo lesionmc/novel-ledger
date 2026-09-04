@@ -53,7 +53,7 @@ def req(method, path, body=None):
         headers={"Content-Type": "application/json; charset=utf-8"} if data else {},
     )
     try:
-        with urllib.request.urlopen(r, timeout=15) as resp:
+        with urllib.request.urlopen(r, timeout=180) as resp:  # 建书断言内含引擎建账（模型调用），放宽到 180s
             return resp.status, resp.headers.get("Content-Type", ""), resp.read().decode("utf-8")
     except urllib.error.HTTPError as e:
         return e.code, e.headers.get("Content-Type", ""), e.read().decode("utf-8")
@@ -115,11 +115,13 @@ try:
     check("POST /api/chat 缺 messages → 400 且零外呼", code == 400, f"{code} {body[:80]}")
 
     # 9. 建书链路（shutil 漏 import 曾让建书 500，2026-09-04 修复）：建临时书→验 ok→清理
+    #    幂等：上次超时的请求可能已在服务端建成功，先清理残留
+    import shutil as _sh
+    _sh.rmtree(os.path.join(S.BOOKS_DIR, "测试_断言_建书"), ignore_errors=True)
     code, _, body = req("POST", "/api/books", {"name": "测试_断言_建书"})
     ok_created = code == 200 and json.loads(body).get("ok") is True
     check("POST /api/books 建书成功（shutil 可用）", ok_created, f"{code} {body[:80]}")
     if ok_created:
-        import shutil as _sh
         _sh.rmtree(os.path.join(S.BOOKS_DIR, "测试_断言_建书"), ignore_errors=True)
         check("测试书已清理", not os.path.isdir(os.path.join(S.BOOKS_DIR, "测试_断言_建书")))
 

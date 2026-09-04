@@ -19,12 +19,17 @@ const NAV = [
 export default function App() {
   const [view, setView] = useState("home");
   const [keySet, setKeySet] = useState(false);
+  const [autoBook, setAutoBook] = useState(null); // 建书向导创建后自动在新工作台打开该书
 
   useEffect(() => {
     fetch("/api/status").then((r) => r.json()).then((d) => setKeySet(!!d.key_set)).catch(() => {});
   }, []);
 
-  const go = (v) => v && setView(v);
+  const go = (v, book) => {
+    if (!v) return;
+    setView(v);
+    setAutoBook(book || null);
+  };
 
   return (
     <div className="flex min-h-screen flex-col">
@@ -58,7 +63,7 @@ export default function App() {
 
         <main className="mx-auto w-full max-w-6xl flex-1 p-6">
           {view === "home" && <Home go={go} />}
-          {view === "workspace" && <Workspace />}
+          {view === "workspace" && <Workspace autoOpen={autoBook} />}
           {view === "usage" && <Usage />}
           {view === "newbook" && <NewWizard go={go} />}
           {view === "settings" && <Settings go={go} />}

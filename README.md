@@ -35,6 +35,7 @@ python scripts/deai.py --polish books/雾城档案 --chapter 5    # 单章精判
 python scripts/deai.py --apply books/雾城档案 --chapter 5     # 应用改写（自动备份）
 
 # （开发者）零网络冒烟测试，改代码后回归用
+python scripts/backup_book.py --book books/我的书   # （可选）R34 一键备份全家桶 zip（backups/ 留最近 10 份）
 python scripts/smoke_test.py
 
 # （开发者）Web 后端路由验收（本机回环、零外部请求；改动 web/server.py 后跑）
@@ -68,6 +69,9 @@ books/我的书/
 | `--audit`（配 `--chapter N`） | 一致性审计：对照账本检查第 N 章正文的冲突/漏记，报告落盘 `chXXX.一致性审计.md`（不改文件） |
 | `--no-state` | 写正文但跳过账本更新（调试用） |
 | `--model/--base-url/--reasoning-effort` | 换模型/换思考预算（默认读 .env） |
+| `--words N` | R31 目标字数（1000–10000 默认 3000），超 ±30% 仅提醒；Web 端有一键加长/精简（`--adjust`） |
+| `--plan` | R32 闸口：按配方出第 N 章「章纲+200 字试写」，落盘 `chapters/chXXX.章纲.md`；写章时自动注入并强制遵循 |
+| `--adjust --target W --mode expand\|shrink` | R31 一键加长/精简第 N 章（先自动备份 .bak.md） |
 
 > **备用模型自动切换**：主模型连续失败后，引擎自动改用 `.env` 里配置的
 > `FALLBACK_API_KEY / FALLBACK_BASE_URL / FALLBACK_MODEL`（防单点故障，详见 `.env.example`）。
@@ -157,7 +161,7 @@ AI 负责起草、自查、改写建议、记忆回填；人在闸口：定大�
 - [x] **P0** 配方验证：单章连写不崩（上下文注入配方）
 - [x] **P1** 记忆中枢：滚动状态账本（一本书零穿帮连写 6 章示例）
 - [x] **P1** 去 AI 味引擎：检测（scan/polish）+ 安全应用（apply）+ 红线预防
-- [x] **工程配套**：多模型 failover、账本一致性审计（--audit）、零依赖冒烟测试（27 断言）+ Web 路由验收（16 断言）
+- [x] **工程配套**：多模型 failover、账本一致性审计（--audit）、零依赖冒烟测试（47 断言）+ Web 路由验收（21 断言）
 - [x] **Web 工作台（本地）**：`web/server.py`（标准库 HTTP + JSON API）+ 三栏前端；书树/章节/报告浏览、正文编辑、写下一章、审计、去味、应用改写、AI 建书向导、⚙ 设置页、SSE 流式对话。启动：`start-web.bat` 或 `python web/server.py --port 8801`
 - [ ] **v0.2（backlog，详见 docs/02 R31-R35）**：章节字数软控、提纲闸口（含 200 字试写）、一键备份、伏笔状态机 + 超期告警、Web E2E
 - [ ] **v0.3（backlog，docs/02 R36-R42）**：向量层可选插件、账本分段摘要、拆书续写、学自己文风、关系图谱、平台视角 AI 味自检、异构第二模型审计

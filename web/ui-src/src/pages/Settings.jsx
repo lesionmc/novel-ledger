@@ -6,7 +6,9 @@ const FIELDS = [
   { group: "主模型", items: [
     { key: "AGNES_API_KEY", label: "API Key", type: "password", ph: "sk-..." },
     { key: "AGNES_BASE_URL", label: "Base URL", type: "text", ph: "https://apihub.agnes-ai.com/v1/" },
-    { key: "AGNES_MODEL", label: "Model ID", type: "text", ph: "agnes-2.5-flash" },
+    { key: "AGNES_MODEL", label: "Model ID（写手）", type: "text", ph: "agnes-2.5-flash" },
+    { key: "PLANNER_MODEL", label: "策划模型（可选，留空=写手）", type: "text", ph: "出章纲用，留空回落写手" },
+    { key: "REVIEWER_MODEL", label: "审校模型（可选，留空=写手）", type: "text", ph: "一致性审计用，留空回落写手" },
   ]},
   { group: "备用模型（主失败自动切换）", items: [
     { key: "FALLBACK_API_KEY", label: "Fallback API Key", type: "password", ph: "备用厂商 key（可选）" },

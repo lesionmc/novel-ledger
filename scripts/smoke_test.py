@@ -252,6 +252,69 @@ try:
 finally:
     shutil.rmtree(_snapbook, ignore_errors=True)
 
+# ── 9. v0.2 新功能（R31/32/34/35） ─────────────────────────────
+print("\n== 9. v0.2 新功能 ==")
+import backup_book  # noqa: E402
+
+# 9a. R31 字数夹取边界
+check("字数夹取：默认 3000", write_chapter.clamp_words(None) == 3000)
+check("字数夹取：非法串回落 3000", write_chapter.clamp_words("abc") == 3000)
+check("字数夹取：下限 999→1000", write_chapter.clamp_words(999) == 1000)
+check("字数夹取：上限 10001→10000", write_chapter.clamp_words(10001) == 10000)
+
+# 9b. R31 build_context 字数注入 + R32 章纲注入
+_wbook = make_book(tempfile.mkdtemp(prefix="w9_"), chapters={"ch001.md": "第一章内容。" * 50})
+os.makedirs(os.path.join(_wbook, "chapters"), exist_ok=True)
+with open(os.path.join(_wbook, "chapters", "ch002.章纲.md"), "w", encoding="utf-8") as f:
+    f.write("# ch002 章纲\n- 目标：测试章纲注入")
+try:
+    ctx = write_chapter.build_context(_wbook, 2, words=4500)
+    check("配方注入目标字数 4500", "4500 字左右" in ctx)
+    check("配方注入作者确认章纲", "本章章纲" in ctx and "测试章纲注入" in ctx)
+    ctx3 = write_chapter.build_context(_wbook, 3, words=3000)
+    check("无章纲的章不注入章纲块", "本章章纲" not in ctx3)
+finally:
+    shutil.rmtree(os.path.dirname(_wbook), ignore_errors=True)
+
+# 9c. R35 伏笔超期解析（边界：差 1 天不算超期）
+_state = """## 伏笔账本
+- 神秘监视者盯紧他 [待回收 · 第1章]
+- 徽记同源之谜 [待回收 · 第2章]
+- 车祸真相 [已回收·埋设于第1章，回收于第5章]
+- 无章号的老条目 [待回收]
+- （空）
+"""
+over = write_chapter.overdue_foreshadows(_state, 5)   # 5-1=4>3 超；5-2=3 不超
+check("伏笔超期：第1章条目在 ch5 判超期", len(over) == 1 and over[0]["planted"] == 1
+      and over[0]["overdue_by"] == 4, str(over)[:120])
+over2 = write_chapter.overdue_foreshadows(_state, 6)  # 6-2=4>3 也超
+check("伏笔超期：ch6 时两条均超", len(over2) == 2, str(over2)[:120])
+check("伏笔状态解析：已回收/失效/无章号", write_chapter.parse_foreshadows(_state)[2]["status"] == "已回收"
+      and write_chapter.parse_foreshadows(_state)[3]["planted"] is None)
+
+# 9d. R34 备份：打包 + 修剪保留 10 份
+_bkbook = make_book(tempfile.mkdtemp(prefix="bk9_"), chapters={"ch001.md": "正文"})
+_bkout = tempfile.mkdtemp(prefix="bkout_")
+try:
+    p1 = backup_book.backup_book(_bkbook, out_dir=_bkout, keep=10)
+    check("备份 zip 生成且含账本", os.path.exists(p1) and p1.endswith(".zip"))
+    import zipfile as _zf
+    with _zf.ZipFile(p1) as z:
+        names = z.namelist()
+    check("备份含三件套+账本+正文",
+          any(n.endswith("设定.md") for n in names) and any("story_state.md" in n for n in names)
+          and any(n.endswith("ch001.md") for n in names), str(names)[:120])
+    # 造 12 份旧备份，keep=10 应修剪到 10
+    for i in range(12):
+        with open(os.path.join(_bkout, f"测试书-old{i:02d}.zip"), "w") as f:
+            f.write("x")
+    backup_book.backup_book(_bkbook, out_dir=_bkout, keep=10)
+    left = [f for f in os.listdir(_bkout) if f.startswith("测试书-")]
+    check("备份修剪：超过 10 份只留最近 10 份", len(left) == 10, str(len(left)))
+finally:
+    shutil.rmtree(os.path.dirname(_bkbook), ignore_errors=True)
+    shutil.rmtree(_bkout, ignore_errors=True)
+
 # ── 汇总 ───────────────────────────────────────────────────────
 print(f"\n{'=' * 40}\n结果：{PASS} 通过 / {FAIL} 失败")
 if FAIL:

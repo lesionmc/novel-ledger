@@ -50,6 +50,7 @@ sys.path.insert(0, SCRIPTS_DIR)  # 让 server 可直接 import 引擎侧公共�
 
 WRITE_CH = os.path.join(SCRIPTS_DIR, "write_chapter.py")
 DEAI = os.path.join(SCRIPTS_DIR, "deai.py")
+BACKUP = os.path.join(SCRIPTS_DIR, "backup_book.py")
 DOCS = ("设定", "角色卡", "大纲", "state")
 DOC_FILE = {"设定": "设定.md", "角色卡": "角色卡.md", "大纲": "大纲.md", "state": "story_state.md"}
 PORT = 8000
@@ -70,7 +71,8 @@ KEY_SET = _check()
 
 # ---- .env 安全读写（只允许改这些键，其余行原样保留）----
 SETTING_KEYS = ("AGNES_API_KEY", "AGNES_BASE_URL", "AGNES_MODEL",
-                "FALLBACK_API_KEY", "FALLBACK_BASE_URL", "FALLBACK_MODEL")
+                "FALLBACK_API_KEY", "FALLBACK_BASE_URL", "FALLBACK_MODEL",
+                "PLANNER_MODEL", "REVIEWER_MODEL")  # R32⑤：策划/审校角色模型，留空回落写手
 
 
 def read_settings():
@@ -139,9 +141,20 @@ def live_env():
     }
 
 
+_LAST_USAGE = None  # R48：最近一次 llm_chat 的用量（供接口回传前端显示）
+
+
+def parse_usage(out: str, err: str):
+    """从引擎输出解析 [用量] 行（R48→前端显示本次消耗）。"""
+    m = re.search(r"\[用量\] 输入 (\d+) / 输出 (\d+) / 总 (\d+)", out + err)
+    return {"in": int(m.group(1)), "out": int(m.group(2)), "total": int(m.group(3))} if m else None
+
+
 def llm_chat(messages, temperature=0.7, max_tokens=2000, action="Web对话"):
     """用配置的模型做一次 chat（供对话建书/测试连接用）。返回文本。
     R48：响应带 usage 时顺带记用量流水，记账失败不影响返回。"""
+    global _LAST_USAGE
+    _LAST_USAGE = None
     cfg = live_env()
     if not cfg["key"]:
         raise RuntimeError("未配置 AGNES_API_KEY（请在 ⚙ 设置 里填写）")
@@ -163,6 +176,9 @@ def llm_chat(messages, temperature=0.7, max_tokens=2000, action="Web对话"):
         data = json.loads(resp.read().decode("utf-8"))
     u = data.get("usage") or {}
     if u:
+        _LAST_USAGE = {"in": u.get("prompt_tokens") or 0,
+                       "out": u.get("completion_tokens") or 0,
+                       "total": u.get("total_tokens") or ((u.get("prompt_tokens") or 0) + (u.get("completion_tokens") or 0))}
         try:
             import usage_log
             usage_log.log_usage(action, cfg["model"],
@@ -373,14 +389,24 @@ class Handler(BaseHTTPRequestHandler):
                 snap_dir = os.path.join(p, "_snapshots")
                 snaps = sorted(f for f in (os.listdir(snap_dir) if os.path.isdir(snap_dir) else [])
                                if re.match(r"ch\d+\.state\.md$", f))
+                # R35 伏笔超期：以最近已写章为"当前章"计算
+                import write_chapter as _wc
+                chs = chapter_list(p)
+                cur = chs[-1][0] if chs else 0
+                try:
+                    overdue = _wc.overdue_foreshadows(read_text(os.path.join(p, "story_state.md")), cur)
+                except Exception:
+                    overdue = []
                 api_ok(self, {
                     "name": name,
                     "chapters": [{"no": n, "file": f,
                                    "size": os.path.getsize(os.path.join(p, "chapters", f))}
-                                 for n, f in chapter_list(p)],
+                                 for n, f in chs],
                     "next_no": next_chapter_no(p),
                     "has_state": os.path.exists(os.path.join(p, "story_state.md")),
-                    "snapshots": snaps,  # R47 章快照底账
+                    "snapshots": snaps,          # R47 章快照底账
+                    "overdue": [{"text": o["text"], "planted": o["planted"],
+                                 "overdue_by": o["overdue_by"]} for o in overdue],  # R35
                 })
                 return
             if len(segs) == 4 and segs[2] == "doc":
@@ -454,7 +480,8 @@ class Handler(BaseHTTPRequestHandler):
                 self._chat_stream(msgs, float(data.get("temperature") or 0.8))
                 return
             try:
-                text = llm_chat(msgs, temperature=float(data.get("temperature") or 0.8))
+                mt = int(data.get("max_tokens") or 2000)  # 建书三件套等长输出需要放宽（曾因 2000 截断丢大纲块）
+                text = llm_chat(msgs, temperature=float(data.get("temperature") or 0.8), max_tokens=mt)
                 api_ok(self, {"ok": True, "content": text})
             except Exception as e:
                 api_error(self, 502, f"AI 调用失败：{e}")
@@ -512,38 +539,81 @@ class Handler(BaseHTTPRequestHandler):
 
             if action == "write":
                 no = int(data.get("no") or 0) or next_chapter_no(p)
+                words = data.get("words")
                 if not os.path.exists(os.path.join(p, "story_state.md")):
                     sys.stderr.write("  [web] 缺 story_state.md，自动 init-state…\n")
                     run_engine([WRITE_CH, "--book", p, "--init-state"])
-                ok, out, err = run_engine([WRITE_CH, "--book", p, "--chapter", str(no)])
+                engine_args = [WRITE_CH, "--book", p, "--chapter", str(no)]
+                try:
+                    words = max(1000, min(10000, int(words))) if words else None
+                except (TypeError, ValueError):
+                    words = None
+                if words:
+                    engine_args += ["--words", str(words)]
+                if data.get("auto_backup"):
+                    engine_args += ["--auto-backup"]  # R34③ 可选开关
+                plan_file = os.path.join(p, "chapters", f"ch{no:03d}.章纲.md")
+                ok, out, err = run_engine(engine_args)
                 body = read_text(os.path.join(p, "chapters", f"ch{no:03d}.md"))
                 api_ok(self, {"ok": ok, "no": no, "chars": len(body or ""),
-                              "body": body, "log": (out + err)[-2000:]})
+                              "body": body, "log": (out + err)[-2000:],
+                              "words": words, "plan_used": os.path.exists(plan_file),
+                              "usage": parse_usage(out, err)})
                 return
 
-            if action == "outline":
-                # R32 闸口前半：出「章纲 + 200 字试写」给作者确认（引擎 --plan 落地前由服务端复用配方拼装）
+            if action == "plan":
+                # R32 闸口：出章纲（走引擎 --plan，落盘 chapters/chXXX.章纲.md）
                 no = int(data.get("no") or 0) or next_chapter_no(p)
+                words = data.get("words") or 3000
+                ok, out, err = run_engine([WRITE_CH, "--book", p, "--plan",
+                                           "--chapter", str(no), "--words", str(words)], timeout=300)
+                report = read_text(os.path.join(p, "chapters", f"ch{no:03d}.章纲.md"))
+                # R35②：随章纲返回超期伏笔，确认卡顶部红条数据源
                 try:
                     import write_chapter as _wc
-                    context = _wc.build_context(p, no)
-                except Exception as e:
-                    api_error(self, 500, f"组装上下文失败：{e}")
+                    overdue = _wc.overdue_foreshadows(read_text(os.path.join(p, "story_state.md")), no)
+                except Exception:
+                    overdue = []
+                api_ok(self, {"ok": ok, "no": no, "outline": report, "log": (out + err)[-1500:],
+                              "usage": parse_usage(out, err) or _LAST_USAGE, "overdue": overdue})
+                return
+
+            if action == "plan-save":
+                # R32 闸口：保存作者修改后的章纲（覆盖 chXXX.章纲.md）
+                no = int(data.get("no") or 0)
+                text = data.get("text")
+                if no < 1 or text is None:
+                    api_error(self, 400, "需要 no 与 text")
                     return
-                prompt = (context
-                          + "\n\n【本次任务调整】先不要写正文全文。请作为策划输出：\n"
-                            "1) 本章章纲：本章目标 / 关键事件 / 末尾钩子 / 伏笔操作（本章埋设/推进/回收哪条，引用账本中的伏笔）\n"
-                            "2) 开头 200 字试写（定风格用）\n"
-                            "只输出这两部分，不要输出正文全文。")
+                write_text(os.path.join(p, "chapters", f"ch{no:03d}.章纲.md"), text)
+                api_ok(self, {"ok": True, "no": no})
+                return
+
+            if action == "resize":
+                # R31 字数软控后半：一键加长/精简
+                no = int(data.get("no") or 0)
+                mode = data.get("mode") if data.get("mode") in ("expand", "shrink") else "expand"
+                if data.get("target") is None:
+                    api_error(self, 400, "需要 target（1000–10000 的整数）")
+                    return
+                target = data.get("target")
                 try:
-                    text = llm_chat(
-                        [{"role": "system", "content": "你是中文网文资深策划，基于资料输出章纲与试写，简洁、可执行。"},
-                         {"role": "user", "content": prompt}],
-                        temperature=0.4, max_tokens=2500, action="出章纲")
-                except Exception as e:
-                    api_error(self, 502, f"章纲生成失败：{e}")
+                    target = max(1000, min(10000, int(target)))
+                except (TypeError, ValueError):
+                    api_error(self, 400, "target 需为 1000–10000 的整数")
                     return
-                api_ok(self, {"ok": True, "no": no, "outline": text})
+                ok, out, err = run_engine([WRITE_CH, "--book", p, "--adjust", "--chapter", str(no),
+                                           "--target", str(target), "--mode", mode], timeout=600)
+                body = read_text(os.path.join(p, "chapters", f"ch{no:03d}.md"))
+                api_ok(self, {"ok": ok, "no": no, "chars": len(body or ""), "log": (out + err)[-1500:],
+                              "usage": parse_usage(out, err)})
+                return
+
+            if action == "backup":
+                # R34 一键备份：全家桶 zip，backups/ 保留最近 10 份
+                ok, out, err = run_engine([BACKUP, "--book", p], timeout=120)
+                m = re.search(r"已生成 → (.+)", out)
+                api_ok(self, {"ok": ok, "path": m.group(1).strip() if m else "", "log": (out + err)[-1000:]})
                 return
 
             if action == "audit":
@@ -556,7 +626,8 @@ class Handler(BaseHTTPRequestHandler):
                     run_engine([WRITE_CH, "--book", p, "--init-state"])
                 ok, out, err = run_engine([WRITE_CH, "--book", p, "--audit", "--chapter", str(no)])
                 report = read_text(os.path.join(p, "chapters", f"ch{no:03d}.一致性审计.md"))
-                api_ok(self, {"ok": ok, "no": no, "report": report, "log": (out + err)[-1500:]})
+                api_ok(self, {"ok": ok, "no": no, "report": report, "log": (out + err)[-1500:],
+                              "usage": parse_usage(out, err)})
                 return
 
             if action == "scan":
@@ -571,7 +642,8 @@ class Handler(BaseHTTPRequestHandler):
                     return
                 ok, out, err = run_engine([DEAI, "--polish", p, "--chapter", str(no)], timeout=300)
                 report = read_text(os.path.join(p, "chapters", f"ch{no:03d}.AI腔体检.md"))
-                api_ok(self, {"ok": ok, "no": no, "report": report, "log": (out + err)[-1500:]})
+                api_ok(self, {"ok": ok, "no": no, "report": report, "log": (out + err)[-1500:],
+                              "usage": parse_usage(out, err)})
                 return
 
             if action == "apply":

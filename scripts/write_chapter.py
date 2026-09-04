@@ -122,7 +122,7 @@ STATE_UPDATER_PROMPT = """你是小说故事的"状态账本书记员"，职责�
 3. ## 计数与资源：逐项核对本章使用情况并更新（如"回闪已用次数"）；本章未使用的项保持原值，不许清零。
 4. ## 角色状态：记录本章结束时相对旧账的"新变化/新认知/新位置"；无变化的角色不写。旧账中尚未了结的状态要保留（可追加"→已于第X章更新"），不许删除未了结事项。
 5. ## 关键事件时间线：把本章关键事件按发生顺序整理，整体保留最近约 10 条；更早的合并压缩成一条"（更早：……）"放在最底。
-6. ## 伏笔账本：本章新埋的伏笔加一条"待回收·埋设于本章"；本章被回收/解答的伏笔把状态改成"已回收·回收于本章"；其余原样保留，不许丢。
+6. ## 伏笔账本：本章新埋的伏笔加一条"待回收·埋设于第X章"（X=本章章号，必须写明埋设章）；本章被回收/解答的改成"已回收·埋设于第Y章，回收于本章"；其余条目原样保留，不许丢。若某条"待回收"伏笔的埋设章距本章已超过 3 章仍未回收，在该条目末尾追加"⚠超期（已N章未回收，建议尽快安排回收或标失效）"。
 7. ## 关键物件：新出现的物件必须登记（含外观、现在归属、所在位置）；旧账里已登记过的物件，外观描述严禁改动（防止道具漂移）。
 8. 全文用紧凑 Markdown 列表；输出就是新账本全文本身，不要任何前言、后语、代码块围栏。
 9. 冲突自检（防幻觉漏记/记错）：若本章正文与旧账存在矛盾——时间倒退、计数不一致、
@@ -164,11 +164,23 @@ def chapter_no_of(fname: str) -> int:
     return int(m.group(1)) if m else -1
 
 
-def build_context(book_dir: str, chapter_no: int) -> str:
-    """组装上下文配方：宪章 + 大纲 + 角色 + 结构化记忆(meta) + 上一章结尾。
+def clamp_words(w) -> int:
+    """R31 字数软控：目标字数夹在 1000–10000，默认 3000。非法输入回落默认。"""
+    try:
+        w = int(w)
+    except (TypeError, ValueError):
+        return 3000
+    return max(1000, min(10000, w))
+
+
+def build_context(book_dir: str, chapter_no: int, words: int = 3000) -> str:
+    """组装上下文配方：宪章 + 大纲 + 角色 + 滚动账本 + 上一章结尾（+ 作者确认的章纲）。
 
     记忆来源优先级：chXXX.meta.md（章末回填的结构化摘要） > 旧版文尾注释块。
-    上一章结尾始终取最新已写正文的末尾，保证文气衔接。"""
+    上一章结尾始终取最新已写正文的末尾，保证文气衔接。
+    words：R31 字数软控目标（1000–10000）。函数内自钳制（防直调方漏钳把
+    999/10001/None 原样注入提示词），与 clamp_words 口径一致。"""
+    words = clamp_words(words)
     parts = []
 
     charter = read_text(os.path.join(book_dir, "设定.md"))
@@ -207,16 +219,64 @@ def build_context(book_dir: str, chapter_no: int) -> str:
                      "其中的事实/计数/伏笔/物件描述不得违背或推翻）】\n" + state)
     else:
         parts.append("【提醒】本故事还没有记忆账本，请先用 --init-state 初始化（或人工创建 story_state.md）。")
+
+    # R32 闸口：作者确认过的章纲（--plan 产物），事件/钩子/伏笔操作必须严格遵循
+    plan = read_text(os.path.join(chapters_dir, f"ch{chapter_no:03d}.章纲.md"))
+    if plan:
+        parts.append("【本章章纲（作者已在闸口确认，本章事件顺序/末尾钩子/伏笔操作必须严格遵循）】\n" + plan)
+
     if prev_tail:
         parts.append(f"【上一章结尾（续写从这里接，不要重复这段内容）】\n{prev_tail}")
 
     parts.append(
-        f"【当前任务】请续写第 {chapter_no} 章正文，3000 字左右（中文）。"
+        f"【当前任务】请续写第 {chapter_no} 章正文，{words} 字左右（中文）。"
         f"要求：衔接上一章结尾自然推进；人物名字/身份/称呼与角色卡一致；"
         f"严格遵守上方结构化记忆里已发生的事件与伏笔，不得编造与其矛盾的前情；"
         f"时间线要与记忆中的时间顺延，不可倒退或跳变；本章结尾留一个小钩子。直接输出正文。"
     )
     return "\n\n".join(parts)
+
+
+# ---------------------------------------------------------------------------
+# R35 伏笔超期扫描：待回收伏笔的埋设章距当前章 > grace 章即告警
+# ---------------------------------------------------------------------------
+def parse_foreshadows(state_text: str) -> list:
+    """解析账本「## 伏笔账本」小节 → [{text, status, planted}]。
+    status ∈ 待回收/已回收/失效；planted = 埋设章号（解析不出为 None）。"""
+    m = re.search(r"## 伏笔账本[^\n]*\n([\s\S]*?)(?=\n## |\Z)", state_text)
+    items = []
+    if not m:
+        return items
+    for ln in m.group(1).splitlines():
+        t = ln.strip()
+        if not t.startswith("- ") or t == "- （空）":
+            continue
+        text = t[2:]
+        status = "待回收"
+        if "已回收" in text:
+            status = "已回收"
+        elif "失效" in text:
+            status = "失效"
+        planted = None
+        pm = re.search(r"埋设[^0-9]{0,4}第?\s*(\d+)\s*章", text)  # 「埋设于第1章/埋设·第1章」
+        if pm:
+            planted = int(pm.group(1))
+        else:
+            cm = re.search(r"第\s*(\d+)\s*章", text)  # 兼容旧格式「[待回收 · 第1章]」
+            if cm:
+                planted = int(cm.group(1))
+        items.append({"text": text, "status": status, "planted": planted})
+    return items
+
+
+def overdue_foreshadows(state_text: str, current_chapter: int, grace: int = 3) -> list:
+    """超期未回收伏笔清单：状态=待回收 且 本章号-埋设章 > grace（拍板：超 3 章告警）。"""
+    out = []
+    for it in parse_foreshadows(state_text):
+        if it["status"] == "待回收" and it["planted"] and current_chapter - it["planted"] > grace:
+            it["overdue_by"] = current_chapter - it["planted"]
+            out.append(it)
+    return out
 
 
 def _post_chat(base_url: str, api_key: str, payload: dict, timeout: int = 240):
@@ -390,7 +450,8 @@ AUDIT_PROMPT = """你是小说故事的一致性审计员。对照【旧账本�
 1. 冲突：正文与账本矛盾——时间倒退或跳跃异常、计数（如回闪次数/资源）对不上、
    角色状态或所在位置矛盾、物件归属/外观与账本冲突、已回收的伏笔又被当未解使用；
 2. 漏记：本章发生了明显应入账的事实（新角色出场、新物件、重要决定、新伏笔）但账本没有；
-3. 存疑：你拿不准但作者应该看一眼的地方。
+3. 存疑：你拿不准但作者应该看一眼的地方；
+4. 伏笔超期：账本中"待回收"伏笔若埋设章距本章已超过 3 章仍未回收，单独列出并给出处理建议（尽快回收/标失效）。
 每条给出：位置（正文第几段附近 / 账本哪一小节）+ 问题描述 + 建议改法。
 若确实没问题，就输出「未发现冲突/漏记」。只输出审计清单本身，不要客套话。"""
 
@@ -433,6 +494,99 @@ def audit_chapter(api_key: str, base_url: str, model: str, book_dir: str,
     return out
 
 
+PLAN_PROMPT = """【本次任务调整】先不要写正文全文。请作为策划输出：
+1) 本章章纲：本章目标 / 关键事件 / 末尾钩子 / 伏笔操作（本章埋设/推进/回收哪条，引用账本中的伏笔）
+2) 开头 200 字试写（定风格用）
+只输出这两部分，不要输出正文全文。"""
+
+# ── R32⑥ 规则外置：rules/*.md 存在即覆盖内置默认（改规则不改代码）──────────
+RULES_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), os.pardir, "rules")
+
+
+def load_rules(name: str, default: str) -> str:
+    """读 rules/<name>；不存在/为空/读失败 → 用内置默认。"""
+    try:
+        p = os.path.normpath(os.path.join(RULES_DIR, name))
+        if os.path.isfile(p):
+            with open(p, encoding="utf-8") as f:
+                s = f.read().strip()
+            if s:
+                return s
+    except Exception as e:  # 规则读不进去绝不能挡写作
+        print(f"⚠ rules/{name} 读取失败，用内置默认：{e}", file=sys.stderr)
+    return default
+
+
+DEAI_RULES = load_rules("deai_rules.md", DEAI_RULES)
+SYSTEM_PROMPT = load_rules(
+    "system.md",
+    "你是一位资深中文网文作者，擅长都市异能/玄幻/悬疑等类型小说的连载创作。"
+    "你负责根据给定设定续写章节正文，只输出小说正文，不要输出任何解释、"
+    "章节标题以外的标记或对话。正文用流畅的中文白话，有网文节奏感，"
+    "对话要像活人说话。\n\n【去AI腔红线】\n" + DEAI_RULES,
+)
+STATE_UPDATER_PROMPT = load_rules("state_updater.md", STATE_UPDATER_PROMPT)
+AUDIT_PROMPT = load_rules("audit.md", AUDIT_PROMPT)
+PLAN_PROMPT = load_rules("plan.md", PLAN_PROMPT)
+
+
+def plan_chapter(api_key: str, base_url: str, model: str, book_dir: str,
+                 chapter: int, words: int = 3000, reasoning_effort: str = "low") -> str:
+    """R32 闸口前半：按配方出「章纲 + 200 字试写」，落盘 chapters/chXXX.章纲.md。
+    只落盘章纲不改正文；作者可在闸口修改，写章时 build_context 自动注入并强制遵循。"""
+    context = build_context(book_dir, chapter, words=words)
+    print(f"[plan] ch{chapter:03d}：按配方出章纲+试写（目标 {words} 字）...")
+    text = call_llm(
+        api_key, base_url, model, context + "\n\n" + PLAN_PROMPT,
+        temperature=0.4, max_tokens=4000, reasoning_effort=reasoning_effort,
+        system_prompt="你是中文网文资深策划，基于资料输出章纲与试写，简洁、可执行。",
+        max_retries=3,
+        usage_meta={"action": "出章纲", "book": os.path.basename(book_dir.rstrip("/\\")),
+                    "chapter": chapter},
+    ).strip()
+    out = os.path.join(book_dir, "chapters", f"ch{chapter:03d}.章纲.md")
+    os.makedirs(os.path.dirname(out), exist_ok=True)  # 新书可能还没有 chapters/
+    with open(out, "w", encoding="utf-8") as f:
+        f.write(text)
+    print(f"[plan] 章纲已落盘 → {out}（人工修改后写章自动遵循）")
+    return out
+
+
+def adjust_chapter(api_key: str, base_url: str, model: str, book_dir: str,
+                   chapter: int, target: int, mode: str, reasoning_effort: str = "low") -> int:
+    """R31 字数软控后半：一键加长/精简。先备份（.bak.md 仅首版规则同 deai），再按目标字数改写正文。"""
+    src = os.path.join(book_dir, "chapters", f"ch{chapter:03d}.md")
+    body = read_text(src)
+    if not body:
+        raise SystemExit(f"缺章节正文：{src}")
+    if mode == "expand":
+        task = (f"在不改变既有情节、人物、事实与伏笔的前提下，把下面这章正文扩写到约 {target} 字"
+                f"（可增加场景细节、对话与心理描写，不得注水重复）。直接输出改写后的完整正文。")
+    else:
+        task = (f"在不丢失主线事件、关键对话与账本事实的前提下，把下面这章正文精简到约 {target} 字。"
+                f"直接输出改写后的完整正文。")
+    print(f"[adjust] ch{chapter:03d}：{mode} 到约 {target} 字（现 {len(body)} 字）...")
+    new_body = call_llm(
+        api_key, base_url, model, task + "\n\n【本章正文】\n" + body,
+        temperature=0.5, max_tokens=12000, reasoning_effort=reasoning_effort,
+        system_prompt="你是资深中文网文作者，只输出改写后的正文本身。",
+        max_retries=2,
+        usage_meta={"action": "字数调整", "book": os.path.basename(book_dir.rstrip("/\\")),
+                    "chapter": chapter},
+    ).strip()
+    bak = os.path.join(book_dir, "chapters", f"ch{chapter:03d}.bak.md")
+    bak_existed = os.path.exists(bak)
+    if not bak_existed:
+        with open(bak, "w", encoding="utf-8") as f:
+            f.write(body)
+    with open(src, "w", encoding="utf-8") as f:
+        f.write(new_body)
+    print(f"[adjust] 完成 → {src}（{len(new_body)} 字；原稿备份：{'已有未覆盖' if bak_existed else bak}）")
+    if abs(len(new_body) - target) / target > 0.30:
+        print(f"⚠ 调整后 {len(new_body)} 字仍超出目标 ±30%，可再跑一次 --adjust。", file=sys.stderr)
+    return len(new_body)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="ai-novel-workbench 引擎：单章连写 + 滚动状态账本记忆")
     ap.add_argument("--book", default="", help="书目录（必填，含 设定.md/大纲.md/角色卡.md）")
@@ -444,7 +598,13 @@ def main() -> int:
     ap.add_argument("--init-state", action="store_true", help="根据设定/角色卡/大纲初始化 story_state.md（写第1章前跑一次）")
     ap.add_argument("--no-state", action="store_true", help="写正文后跳过账本更新（调试用）")
     ap.add_argument("--state-only", action="store_true", help="只更新账本不重写正文（基于 chXXX.md + 旧账重算；用于账本漏更补救）")
+    ap.add_argument("--auto-backup", action="store_true", help="R34③：写完本章后自动全书备份 zip（backups/ 留最近 10 份）")
     ap.add_argument("--audit", action="store_true", help="一致性审计：对照账本检查某章正文的冲突/漏记，落盘审计报告（不改文件）")
+    ap.add_argument("--words", type=int, default=3000, help="R31 目标字数（1000–10000，默认 3000；超 ±30%% 仅提醒不硬卡）")
+    ap.add_argument("--plan", action="store_true", help="R32 闸口前半：按配方出第 N 章章纲+试写，落盘 chapters/chXXX.章纲.md（写章自动遵循）")
+    ap.add_argument("--adjust", action="store_true", help="R31 一键加长/精简：按 --target 改写第 N 章正文（--mode expand|shrink，先备份）")
+    ap.add_argument("--target", type=int, default=0, help="--adjust 的目标字数")
+    ap.add_argument("--mode", choices=["expand", "shrink"], default="expand", help="--adjust 的方向")
     args = ap.parse_args()
 
     api_key = (
@@ -459,6 +619,9 @@ def main() -> int:
     # 配置生效链：命令行 > .env > 内置默认（.env 换厂商必须真正生效）
     base_url = args.base_url if args.base_url else env_or("AGNES_BASE_URL", "AGNES_BASE_URL", DEFAULT_BASE_URL)
     model = args.model if args.model else env_or("AGNES_MODEL", "AGNES_MODEL", DEFAULT_MODEL)
+    # R32⑤ 轻量多角色：策划/审校可配独立模型（.env 的 PLANNER_MODEL/REVIEWER_MODEL），留空回落写手
+    planner_model = env_or("PLANNER_MODEL", "PLANNER_MODEL", "") or model
+    reviewer_model = env_or("REVIEWER_MODEL", "REVIEWER_MODEL", "") or model
 
     book_dir = os.path.abspath(args.book) if args.book else ""
     if not book_dir or not os.path.exists(book_dir):
@@ -489,10 +652,24 @@ def main() -> int:
         print("请指定 --chapter N（写第 N 章），或 --init-state 初始化账本")
         return 1
 
-    # 动作：一致性审计（只读，不改账本与正文）
+    # 动作：一致性审计（只读，不改账本与正文；审校角色可用独立模型）
     if args.audit:
-        audit_chapter(api_key, base_url, model, book_dir, args.chapter,
+        audit_chapter(api_key, base_url, reviewer_model, book_dir, args.chapter,
                       reasoning_effort=args.reasoning_effort)
+        return 0
+
+    # 动作：R32 闸口前半——出章纲+试写落盘（策划角色可用独立模型）
+    if args.plan:
+        plan_chapter(api_key, base_url, planner_model, book_dir, args.chapter,
+                     words=clamp_words(args.words), reasoning_effort=args.reasoning_effort)
+        return 0
+
+    # 动作：R31 一键加长/精简
+    if args.adjust:
+        target = clamp_words(args.target or args.words)
+        adjust_chapter(api_key, base_url, model, book_dir, args.chapter,
+                       target=target, mode=args.mode,
+                       reasoning_effort=args.reasoning_effort)
         return 0
 
     # 动作二：只更新账本（补救漏更）
@@ -520,8 +697,9 @@ def main() -> int:
         return 0
 
     # 主流程：写正文 → 更新账本
-    print(f"[1/4] 组装上下文配方（第 {args.chapter} 章）...")
-    context = build_context(book_dir, args.chapter)
+    words = clamp_words(args.words)
+    print(f"[1/4] 组装上下文配方（第 {args.chapter} 章 · 目标 {words} 字）...")
+    context = build_context(book_dir, args.chapter, words=words)
 
     print(f"[2/4] 调用 {model} 生成正文...")
     body = call_llm(api_key, base_url, model, context,
@@ -530,9 +708,16 @@ def main() -> int:
     body = body.strip()
 
     out_file = os.path.join(out_dir, f"ch{args.chapter:03d}.md")
+    os.makedirs(out_dir, exist_ok=True)  # 新建书（from-chat/模板复制）可能没有 chapters/，落盘前自建
     with open(out_file, "w", encoding="utf-8") as f:
         f.write(body)
     print(f"[3/4] 正文已落盘 → {out_file}（{len(body)} 字）")
+
+    # R31 字数软控：超 ±30% 只提醒不硬卡（拍板 Q11：提醒 + Web 一键加长/精简）
+    if abs(len(body) - words) / words > 0.30:
+        mode = "shrink" if len(body) > words else "expand"
+        print(f"⚠ 字数软控提醒：本章 {len(body)} 字，目标 {words} 字，超出 ±30%。"
+              f"可用 --adjust {args.chapter} --target {words} --mode {mode} 校正（Web 端有对应按钮）。")
 
     if not args.no_state:
         print("     更新滚动账本（记忆回填）...")
@@ -551,10 +736,23 @@ def main() -> int:
                   f"请人工修复 {state_path} 或重跑 --state-only 重算，再写下一章。", file=sys.stderr)
         else:
             snapshot_state(book_dir, args.chapter, new_state)  # R47：校验通过才进快照链
+            # R35 伏笔超期告警（拍板 Q15：超 3 章未回收即响）
+            for it in overdue_foreshadows(new_state, args.chapter):
+                print(f"⚠ 伏笔超期：{it['text'][:60]}"
+                      f"（埋设于第{it['planted']}章，已 {it['overdue_by']} 章未回收）", file=sys.stderr)
     else:
         print("     （--no-state：跳过账本更新）")
 
     print("提示：下一章用 --chapter " + str(args.chapter + 1) + " 续写，会自动带滚动账本记忆验证不崩。")
+
+    # R34③：可选开关——写完本章自动全书备份（backups/ 留最近 10 份）
+    if args.auto_backup:
+        try:
+            import backup_book
+            zp = backup_book.backup_book(book_dir)
+            print(f"[backup] 全书已自动备份 → {zp}")
+        except Exception as e:  # 备份失败不影响本章成果
+            print(f"⚠ 自动备份失败（不影响本章成果）：{e}", file=sys.stderr)
     return 0
 
 

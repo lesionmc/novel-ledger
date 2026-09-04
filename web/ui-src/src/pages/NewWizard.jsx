@@ -77,7 +77,7 @@ export default function NewWizard({ go }) {
     try {
       if (!brief) await genBrief();
       const sys = { role: "system", content: "你是中文网文资深编辑。根据对话 + 简报，直接输出 3 个 markdown 文件内容：\n1) 设定.md（世界观/类型/一句话卖点/硬规则）\n2) 角色卡.md（主角 + 主要对手 + 关键配角，含身份/性格/称呼）\n3) 大纲.md（全书主线 + 第一卷 3-5 章细纲，每章目标/事件/钩子）\n严格用三个 markdown 块，块首分别用 `=== 设定.md ===`、`=== 角色卡.md ===`、`=== 大纲.md ===` 标记。" };
-      const r = await apiPost("/api/chat", { messages: [sys, ...msgs.filter((m) => m.role !== "system")], temperature: 0.6 });
+      const r = await apiPost("/api/chat", { messages: [sys, ...msgs.filter((m) => m.role !== "system")], temperature: 0.6, max_tokens: 8000 });
       const text = r.content || "";
       const f = {};
       const blocks = text.split(/===\s*(.*?)\.md\s*===/);
@@ -100,7 +100,7 @@ export default function NewWizard({ go }) {
       await apiPost("/api/book/from-chat", { name: n, files });
       setStatus(`✅ 《${n}》已建好并初始化`);
       setDone(true);
-      setTimeout(() => go("workspace"), 1200);
+      setTimeout(() => go("workspace", n), 1200);
     } catch (e) { setStatus("创建失败：" + e.message); }
   }
 

@@ -4,13 +4,15 @@ import Workspace from "./pages/Workspace.jsx";
 import Usage from "./pages/Usage.jsx";
 import NewWizard from "./pages/NewWizard.jsx";
 import Settings from "./pages/Settings.jsx";
+import Snapshots from "./pages/Snapshots.jsx";
+import Foreshadow from "./pages/Foreshadow.jsx";
 
-/* novel-ledger · React 工作台（A′ 预构建，逐页迁移中）
-   已迁移：首页工作台 / 章节与账本 / 用量统计 / AI 建书向导 / 设置。 */
+/* novel-ledger · React 工作台（A′ 预构建）
+   已迁移：首页 / 章节与账本 / 用量 / 建书向导 / 设置 / 快照底账 / 伏笔账本。 */
 
 const NAV = [
   { title: "创作", items: [{ label: "工作台", view: "home" }, { label: "章节与账本", view: "workspace" }, { label: "新建书", view: "newbook" }] },
-  { title: "资产", items: [{ label: "用量统计", view: "usage" }, { label: "快照底账", view: null }] },
+  { title: "资产", items: [{ label: "用量统计", view: "usage" }, { label: "快照底账", view: "snapshots" }, { label: "伏笔账本", view: "foreshadow" }] },
   { title: "系统", items: [{ label: "设置", view: "settings" }, { label: "关于", view: null }] },
 ];
 
@@ -60,6 +62,8 @@ export default function App() {
           {view === "usage" && <Usage />}
           {view === "newbook" && <NewWizard go={go} />}
           {view === "settings" && <Settings go={go} />}
+          {view === "snapshots" && <Snapshots />}
+          {view === "foreshadow" && <Foreshadow />}
         </main>
       </div>
     </div>

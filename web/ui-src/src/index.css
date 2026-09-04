@@ -14,6 +14,8 @@
   --color-okbg: #e8f4e6;
   --color-warn: #b07b00;
   --color-warnbg: #fef0d6;
+  --color-err: #b0341d;
+  --color-errbg: #fbe5df;
   --radius-card: 12px;
 }
 

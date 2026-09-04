@@ -17,6 +17,7 @@ export default function Workspace() {
   const [busy, setBusy] = useState("");
   const [log, setLog] = useState("");
   const [msg, setMsg] = useState("");
+  const [outline, setOutline] = useState(null); // R32 闸口：{no, text}
 
   useEffect(() => { api("/api/books").then((r) => setBooks(r.books)).catch(() => {}); }, []);
 
@@ -69,9 +70,21 @@ export default function Workspace() {
     finally { setBusy(""); }
   }
 
+  async function genOutline() {
+    if (busy || !info) return;
+    setBusy("出章纲"); setMsg("");
+    try {
+      const d = await apiPost(`/api/book/${encodeURIComponent(book)}/outline`, { no: info.next_no });
+      setOutline({ no: d.no, text: d.outline });
+      setMsg(`ch${String(d.no).padStart(3, "0")} 章纲+试写已出，请确认（R32 闸口）`);
+    } catch (e) { setMsg("出章纲失败：" + e.message); }
+    finally { setBusy(""); }
+  }
+
   const chapterNo = sel && sel.kind === "ch" ? sel.no : null;
   const actions = [
     { label: "✍ 写下一章", primary: true, fn: () => run("写下一章", () => apiPost(`/api/book/${encodeURIComponent(book)}/write`, {})), need: null },
+    { label: "🧭 出章纲+试写", fn: genOutline, need: null },
     { label: "🧾 一致性审计", fn: () => run("一致性审计", () => apiPost(`/api/book/${encodeURIComponent(book)}/audit`, { no: chapterNo })), need: "ch" },
     { label: "🔬 全书体检", fn: () => run("全书体检", () => apiPost(`/api/book/${encodeURIComponent(book)}/scan`, {})), need: null },
     { label: "🪄 去味精判", fn: () => run("去味精判", () => apiPost(`/api/book/${encodeURIComponent(book)}/polish`, { no: chapterNo })), need: "ch" },
@@ -184,6 +197,21 @@ export default function Workspace() {
           <div className="mt-4 rounded-lg bg-paper p-3 text-[11px] leading-5 text-inksoft">
             规矩：先审计后去味；apply 后必须重新体检；账本冲突（⚠）要人工裁决后才能续写。
           </div>
+          {outline && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-ink/50" onClick={() => setOutline(null)}>
+              <div className="w-[720px] max-w-[94vw] rounded-2xl bg-panel p-5 shadow-xl" onClick={(e) => e.stopPropagation()}>
+                <div className="mb-2 flex items-center justify-between">
+                  <h3 className="text-sm font-bold text-brand">🧭 闸口确认 · ch{String(outline.no).padStart(3, "0")} 章纲 + 试写（R32）</h3>
+                  <button onClick={() => setOutline(null)} className="text-sm text-inksoft hover:text-ink">✕</button>
+                </div>
+                <textarea value={outline.text} onChange={(e) => setOutline({ ...outline, text: e.target.value })}
+                  className="h-[50vh] w-full resize-none font-mono text-[13px]" />
+                <p className="mt-2 text-[11px] text-inksoft">
+                  确认后引擎将按此章纲写正文（引擎 R32 --plan 落地前，请自行修改任务或继续用「写下一章」直写；此卡可复制留档进创作痕迹链 R46）。
+                </p>
+              </div>
+            </div>
+          )}
         </div>
       </div>
     </div>

@@ -370,6 +370,9 @@ class Handler(BaseHTTPRequestHandler):
                 api_error(self, 404, "书不存在: " + name)
                 return
             if len(segs) == 2:
+                snap_dir = os.path.join(p, "_snapshots")
+                snaps = sorted(f for f in (os.listdir(snap_dir) if os.path.isdir(snap_dir) else [])
+                               if re.match(r"ch\d+\.state\.md$", f))
                 api_ok(self, {
                     "name": name,
                     "chapters": [{"no": n, "file": f,
@@ -377,6 +380,7 @@ class Handler(BaseHTTPRequestHandler):
                                  for n, f in chapter_list(p)],
                     "next_no": next_chapter_no(p),
                     "has_state": os.path.exists(os.path.join(p, "story_state.md")),
+                    "snapshots": snaps,  # R47 章快照底账
                 })
                 return
             if len(segs) == 4 and segs[2] == "doc":
@@ -403,7 +407,9 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if len(segs) >= 4 and segs[2] == "file":
                 rel = "/".join(segs[3:])
-                if not re.fullmatch(r"chapters/[^/]+\.(md|json)", rel) and rel != "story_state.md":
+                if (not re.fullmatch(r"chapters/[^/]+\.(md|json)", rel)
+                        and rel != "story_state.md"
+                        and not re.fullmatch(r"_snapshots/ch\d+\.state\.md", rel)):  # R47 快照底账可读
                     api_error(self, 403, "只允许读 chapters/ 下的文件或账本")
                     return
                 txt = read_text(os.path.join(p, rel))
@@ -513,6 +519,31 @@ class Handler(BaseHTTPRequestHandler):
                 body = read_text(os.path.join(p, "chapters", f"ch{no:03d}.md"))
                 api_ok(self, {"ok": ok, "no": no, "chars": len(body or ""),
                               "body": body, "log": (out + err)[-2000:]})
+                return
+
+            if action == "outline":
+                # R32 闸口前半：出「章纲 + 200 字试写」给作者确认（引擎 --plan 落地前由服务端复用配方拼装）
+                no = int(data.get("no") or 0) or next_chapter_no(p)
+                try:
+                    import write_chapter as _wc
+                    context = _wc.build_context(p, no)
+                except Exception as e:
+                    api_error(self, 500, f"组装上下文失败：{e}")
+                    return
+                prompt = (context
+                          + "\n\n【本次任务调整】先不要写正文全文。请作为策划输出：\n"
+                            "1) 本章章纲：本章目标 / 关键事件 / 末尾钩子 / 伏笔操作（本章埋设/推进/回收哪条，引用账本中的伏笔）\n"
+                            "2) 开头 200 字试写（定风格用）\n"
+                            "只输出这两部分，不要输出正文全文。")
+                try:
+                    text = llm_chat(
+                        [{"role": "system", "content": "你是中文网文资深策划，基于资料输出章纲与试写，简洁、可执行。"},
+                         {"role": "user", "content": prompt}],
+                        temperature=0.4, max_tokens=2500, action="出章纲")
+                except Exception as e:
+                    api_error(self, 502, f"章纲生成失败：{e}")
+                    return
+                api_ok(self, {"ok": True, "no": no, "outline": text})
                 return
 
             if action == "audit":

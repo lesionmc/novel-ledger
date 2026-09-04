@@ -363,7 +363,7 @@ function openSettings() {
       <label>Fallback Base URL<input type="text" id="sFbase" placeholder="https://open.bigmodel.cn/api/paas/v4/" value="${esc(s.settings.FALLBACK_BASE_URL || "")}"></label>
       <label>Fallback Model ID<input type="text" id="sFmodel" placeholder="glm-4.5-flash" value="${esc(s.settings.FALLBACK_MODEL || "")}"></label>
     </div>
-    <style>.form-section{margin-bottom:4px} {form-section h {4 {margin:0 0 6px;color:var(--brand);font-size:13px} {form-section label{display:block;margin-bottom:6px;font-size:12px;color:var(--ink-soft)} {form-section input{margin-top:2px}</style>
+    <style>.form-section{margin-bottom:4px} .form-section h4{margin:0 0 6px;color:var(--brand);font-size:13px} .form-section label{display:block;margin-bottom:6px;font-size:12px;color:var(--ink-soft)} .form-section input{margin-top:2px}</style>
     `, `<button class="btn" onclick="window.novelApp.closeModal()">取消</button>
     <button class="btn" onclick="window.novelApp.testConn()">🔌 测试连接</button>
     <button class="btn primary" onclick="window.novelApp.saveSettings()">💾 保存</button>`);
@@ -391,7 +391,10 @@ async function saveSettings() {
     FALLBACK_BASE_URL: $("#sFbase").value.trim(),
     FALLBACK_MODEL: $("#sFmodel").value.trim(),
   };
-  for (const k of Object.keys(changes)) if (!changes[k]) delete changes[k];
+  for (const k of Object.keys(changes)) {
+    if (!changes[k]) delete changes[k];
+    else if (changes[k] === "****") delete changes[k];  // 脱敏占位符：未改动过的 key 不许写回覆盖真值
+  }
   try {
     const r = await API.put("/api/settings", { changes });
     toast("已保存" + (r.key_set ? "" : "（⚠ 未配 Key）"), r.key_set ? "ok" : "warn");
@@ -429,7 +432,7 @@ function openNewBookView() {
           <div class="tabs-t" id="tabsT">
             <button data-tab="设定" class="active">📄 设定</button>
             <button data-tab="角色卡">👤 角色卡</button>
-            <button data-tab="大纲">🗺 大大纲</</button>
+            <button data-tab="大纲">🗺 大纲</button>
           </div>
           <input type="text" id="bookNameInput" placeholder="书文件夹名（拼音/英文）">
           <textarea id="fileEdit"></textarea>
@@ -440,8 +443,8 @@ function openNewBookView() {
   $("#actions").innerHTML = `
     <button class="btn" onclick="window.novelApp.goHome()">← 返回首页</button>
     <button class="btn" id="genBriefBtn" onclick="window.novelApp.genBrief()">💡 让 AI 提取书名/卖点</button>
-    <button class="btn" id="genFilesBtn" onclick="window.novelApp.genFiles()"() style="display:none">🧬 生成三件套</button>
-    <button class="btn primary" id="createBookBtn" onclick="window.novelApp.createBookFromChat()"() style="display:none">📚 创建并初始化</button>
+    <button class="btn" id="genFilesBtn" onclick="window.novelApp.genFiles()" style="display:none">🧬 生成三件套</button>
+    <button class="btn primary" id="createBookBtn" onclick="window.novelApp.createBookFromChat()" style="display:none">📚 创建并初始化</button>
   `;
   bindWizard();
   state.chat.msgs.push(

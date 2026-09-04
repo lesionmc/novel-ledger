@@ -144,6 +144,20 @@ def read_text(path: str) -> str:
         return f.read().strip()
 
 
+# 账本 7 个小节的固定主干（允许模型给括号里的说明换措辞，但主干标题必须齐全）
+# 血泪史（CH-26）：ch007 写完后账本被模型输出截断，末行停在"## 关键事件时间线（最近约 10"，
+# 缺第 4–7 节还继续用——续写建立在错误前提上。此后每次落盘账本都要过这道校验。
+STATE_SECTIONS = ["## 当前时间", "## 计数与资源", "## 角色状态",
+                  "## 关键事件时间线", "## 伏笔账本", "## 关键物件", "## 待续状态"]
+
+
+def validate_state(state_text: str) -> list:
+    """核对账本 7 小节是否齐全。返回缺失小节的标题清单（空列表 = 结构完整）。"""
+    lines = state_text.splitlines()
+    return [sec for sec in STATE_SECTIONS
+            if not any(ln.strip().startswith(sec) for ln in lines)]
+
+
 def chapter_no_of(fname: str) -> int:
     """从文件名取章节号，如 ch003.meta.md -> 3；不是章节文件返回 -1。"""
     m = re.match(r"ch(\d+)(?:\.meta)?\.md$", fname)
@@ -431,6 +445,11 @@ def main() -> int:
         with open(state_path, "w", encoding="utf-8") as f:
             f.write(state)
         print(f"[init] 账本已落盘 → {state_path}")
+        miss = validate_state(state)
+        if miss:
+            print(f"⚠ [init] 账本结构校验未通过：缺少小节 {miss}。"
+                  f"初始化产物不合格，请重试或人工修复 {state_path}。", file=sys.stderr)
+            return 1
         return 0
 
     if args.chapter < 1:
@@ -457,6 +476,11 @@ def main() -> int:
         with open(state_path, "w", encoding="utf-8") as f:
             f.write(new_state)
         print(f"[state] 账本已更新 → {state_path}")
+        miss = validate_state(new_state)
+        if miss:
+            print(f"⚠ [state] 账本结构校验未通过：缺少小节 {miss}。"
+                  f"重算产物仍不合格，请人工修复 {state_path}。", file=sys.stderr)
+            return 1
         return 0
 
     # 主流程：写正文 → 更新账本
@@ -481,6 +505,11 @@ def main() -> int:
         with open(state_path, "w", encoding="utf-8") as f:
             f.write(new_state)
         print(f"     账本已更新 → {state_path}")
+        miss = validate_state(new_state)
+        if miss:
+            # 正文已成功产出，账本残缺不阻断，但必须大声警告（防 CH-26 复发）
+            print(f"⚠ 账本结构校验未通过：缺少小节 {miss}。"
+                  f"请人工修复 {state_path} 或重跑 --state-only 重算，再写下一章。", file=sys.stderr)
     else:
         print("     （--no-state：跳过账本更新）")
 

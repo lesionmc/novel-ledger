@@ -123,6 +123,20 @@ try:
     check("含账本记忆", "2009-11-19 深夜" in ctx)
     check("含上一章结尾", "他推开了那扇门。" in ctx)
     check("含当前任务", "请续写第 2 章正文" in ctx)
+
+    # ── 5.5 账本 7 小节结构校验（防 CH-26 账本截断复发）────────
+    print("\n== 5.5 账本 7 小节结构校验 ==")
+    _full = write_chapter.STATE_TEMPLATE
+    check("完整模板 7 节齐全", write_chapter.validate_state(_full) == [])
+    _cut = _full[:_full.find("## 关键事件时间线") + 9]          # 停在半截标题，模拟模型输出被截断
+    _miss = write_chapter.validate_state(_cut)
+    check("截断文本能查出缺失小节", len(_miss) >= 3, str(_miss))
+    check("截断时尾节「待续状态」被判缺", "## 待续状态" in _miss, str(_miss))
+    _book4 = make_book(_tmp, "缺节书")                            # make_book 的账本只有 3 节
+    with open(os.path.join(_book4, "story_state.md"), encoding="utf-8") as _f:
+        _partial = _f.read()
+    _miss2 = write_chapter.validate_state(_partial)
+    check("残缺账本(仅3节)精确报缺 4 节", len(_miss2) == 4, str(_miss2))
 finally:
     shutil.rmtree(_tmp, ignore_errors=True)
 

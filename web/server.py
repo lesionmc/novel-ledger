@@ -86,6 +86,13 @@ def read_settings():
     return out
 
 
+def public_settings():
+    """给前端页面/日志看的设置：API Key 一律打码，只回显是否已配置。
+    真实 key 只在 live_env() 内部使用（请求模型时读），绝不出现在任何 HTTP 响应里。"""
+    s = read_settings()
+    return {k: ("****" if (k.endswith("_API_KEY") and v) else v) for k, v in s.items()}
+
+
 def write_settings(changes):
     """只更新白名单键；不存在的键追加到文件尾。返回完整新 settings。"""
     lines = []
@@ -96,6 +103,8 @@ def write_settings(changes):
         pass
     for k, v in changes.items():
         if k not in SETTING_KEYS:
+            continue
+        if v == "****":  # 前端脱敏占位符：用户没动过的 key 不得写回（否则会覆盖真实 key）
             continue
         hit = False
         for i, ln in enumerate(lines):
@@ -313,10 +322,10 @@ class Handler(BaseHTTPRequestHandler):
     def handle_api_get(self, segs):
         if segs == ["status"]:
             api_ok(self, {"ok": True, "key_set": KEY_SET, "books_dir": BOOKS_DIR,
-                           "settings": read_settings()})
+                           "settings": public_settings()})
             return
         if segs == ["settings"]:
-            api_ok(self, {"settings": read_settings()})
+            api_ok(self, {"settings": public_settings()})
             return
         if segs == ["books"]:
             api_ok(self, {"books": list_books()})
@@ -520,9 +529,8 @@ class Handler(BaseHTTPRequestHandler):
             if not isinstance(changes, dict) or not changes:
                 api_error(self, 400, "需要 changes 字段")
                 return
-            new_s = write_settings(changes)
-            api_ok(self, {"ok": True, "settings": new_s,
-                           "key_set": bool(new_s.get("AGNES_API_KEY", ""))})
+            write_settings(changes)
+            api_ok(self, {"ok": True, "settings": public_settings(), "key_set": KEY_SET})
             return
         if segs and segs[0] == "book" and len(segs) == 4:
             name = segs[1]

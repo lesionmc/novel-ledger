@@ -65,15 +65,24 @@ threading.Thread(target=srv.serve_forever, daemon=True).start()
 print(f"== Web 路由验收（本机回环 :{PORT}，零外部请求）==")
 
 try:
-    # 1. 静态首页
+    # 1. 静态首页（v0.2 转正：/ = React 工作台；旧界面在 /legacy）
     code, ctype, body = req("GET", "/")
     check("首页 200", code == 200, str(code))
     check("首页 text/html", ctype.startswith("text/html"), ctype)
-    check("首页含工作台标题", "novel-ledger" in body)
+    check("首页为 React 工作台（含 root 挂载点与工作台标题）",
+          'id="root"' in body and "novel-ledger" in body, body[:80])
+
+    code, ctype, body = req("GET", "/legacy")
+    check("旧界面 /legacy 200 可回退", code == 200 and ctype.startswith("text/html"), str(code))
+    check("旧界面含旧版标记（app.js 引用）", "static/app.js" in body, body[:60])
 
     # 2. JS 静态资源 Content-Type（防坑 13：扩展名 key 前导点 → 全变 octet-stream）
+    code, ctype, body = req("GET", "/assets/" + os.listdir(os.path.join(S.WEB_DIR, "ui", "assets"))[0])
+    check("React assets 200", code == 200, str(code))
+    check("React assets Content-Type 正确",
+          ("javascript" in ctype) or ("css" in ctype) or ("html" in ctype), ctype)
     code, ctype, body = req("GET", "/static/app.js")
-    check("app.js 200", code == 200, str(code))
+    check("app.js（旧界面资产）200", code == 200, str(code))
     check("app.js 是 application/javascript", "javascript" in ctype, ctype)
     check("app.js 不含破损 onlick", '"()' not in body and "大大纲" not in body)
     check("设置页 CSS 无花括号错乱", ".form-section h4{margin" in body and "{form-section" not in body)

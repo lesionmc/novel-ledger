@@ -264,9 +264,12 @@ def api_ok(h, obj):
 
 def serve_static(h, path):
     rel = path.lstrip("/")
-    # React 工作台（A′ 预构建产物，/ui/ → web/ui/）；其余仍走旧版 web/static/
-    if rel == "ui" or rel.startswith("ui/"):
-        sub = rel[3:].lstrip("/") or "index.html"
+    # React 工作台（A′ 预构建产物）；v0.2 起转正：/ 与 /ui/ 都指向新工作台
+    if rel == "ui" or rel.startswith("ui/") or rel.startswith("assets/"):
+        sub = rel[3:].lstrip("/") if rel.startswith("ui") else rel
+        sub = sub or "index.html"
+        if rel.startswith("assets/"):
+            sub = rel  # /assets/* → web/ui/assets/*
         full = os.path.normpath(os.path.join(WEB_DIR, "ui", sub))
         if not full.startswith(os.path.join(WEB_DIR, "ui")):
             api_error(h, 403, "forbidden")
@@ -276,9 +279,25 @@ def serve_static(h, path):
             return
         _send_static_file(h, full)
         return
+    # 旧版界面归档为 /legacy（保留可回退，不再做美化）
+    if rel == "legacy" or rel == "legacy/" or rel == "legacy/index.html":
+        full = os.path.join(WEB_DIR, "static", "index.html")
+        if os.path.isfile(full):
+            _send_static_file(h, full)
+            return
+        api_error(h, 404, "legacy index missing")
+        return
+    if rel.startswith("legacy/"):
+        rel = rel[len("legacy/"):]  # /legacy/static/app.js → 旧 static 资源
     if rel == "":
-        rel = "index.html"
-    elif rel.startswith("static/"):
+        # 转正：根路径 = React 工作台
+        full = os.path.join(WEB_DIR, "ui", "index.html")
+        if os.path.isfile(full):
+            _send_static_file(h, full)
+            return
+        api_error(h, 404, "ui build missing")
+        return
+    if rel.startswith("static/"):
         rel = rel[len("static/"):]
     full = os.path.normpath(os.path.join(WEB_DIR, "static", rel))
     if not full.startswith(os.path.join(WEB_DIR, "static")):
@@ -322,7 +341,7 @@ class Handler(BaseHTTPRequestHandler):
         path = urllib.parse.unquote(parsed.path)
         segs = [s for s in path.split("/") if s]
         try:
-            if not segs or segs[0] in ("index.html", "static", "ui"):
+            if not segs or segs[0] in ("index.html", "static", "ui", "legacy", "assets"):
                 serve_static(self, path)
                 return
             if segs[0] == "api":

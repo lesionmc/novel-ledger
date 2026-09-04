@@ -40,7 +40,7 @@ export default function App() {
         <span className={`rounded-full px-2.5 py-0.5 text-xs ${keySet ? "bg-okbg text-ok" : "bg-warnbg text-warn"}`}>
           {keySet ? "✅ Key 就绪" : "⚠ 未配 Key"}
         </span>
-        <a href="/" className="rounded-lg border border-line px-3 py-1 text-xs hover:border-brand2 hover:text-brand">
+        <a href="/legacy" className="rounded-lg border border-line px-3 py-1 text-xs hover:border-brand2 hover:text-brand">
           旧版界面
         </a>
       </header>

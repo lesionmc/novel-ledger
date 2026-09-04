@@ -75,7 +75,7 @@ export default function App() {
           {view === "settings" && <Settings go={go} />}
           {view === "snapshots" && <Snapshots />}
           {view === "foreshadow" && <Foreshadow />}
-          {view === "assistant" && <Assistant />}
+          {view === "assistant" && <Assistant go={go} />}
         </main>
       </div>
     </div>

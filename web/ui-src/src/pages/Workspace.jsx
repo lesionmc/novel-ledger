@@ -201,7 +201,7 @@ export default function Workspace({ autoOpen = null }) {
       setBatch((b) => ({ ...b, done: i + 1, fail }));
     }
     setBusy("");
-    setMsg(`批量写章结束：完成 ${count - fail}/${count} 章` + (fail ? `（${fail} 章失败，详见直播日志）` : " ✅"));
+    setMsg(`✅ 批量写章完成：成功 ${count - fail}/${count} 章` + (fail ? `（${fail} 章失败，详见直播日志）` : " ✅"));
     setTimeout(() => setBatch(null), 900);
   }
 

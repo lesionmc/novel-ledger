@@ -18,7 +18,7 @@ function loadState() {
 
 const QUICK = ["用三句话总结目前已写的剧情", "检查已写章节有没有前后矛盾，列出来", "给下一章出 3 个可行的剧情方向", "目前哪些伏笔拖太久了？怎么收？"];
 
-export default function Assistant() {
+export default function Assistant({ go }) {
   const saved = loadState();
   const [msgs, setMsgs] = useState(saved.msgs);
   const [input, setInput] = useState("");
@@ -141,6 +141,12 @@ export default function Assistant() {
           附带记忆账本
         </label>
         <span className="flex-1" />
+        {book && go && (
+          <button onClick={() => go("workspace", book)}
+            className="rounded-lg bg-brand px-3 py-1.5 text-xs font-medium text-white hover:bg-brand2">
+            去工作台写下一章 →
+          </button>
+        )}
         <button onClick={() => { if (confirm("清空对话？")) { setMsgs([{ role: "assistant", content: HELLO }]); } }}
           className="text-xs text-inksoft hover:text-ink">清空对话</button>
       </div>

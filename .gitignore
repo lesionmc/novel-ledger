@@ -41,4 +41,3 @@ _research/
 # 用户自建书不入库（仓库只带官方示例书 雾城档案 与模板 sample_book）
 books/*
 !books/雾城档案/
-!books/_archive/

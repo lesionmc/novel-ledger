@@ -247,6 +247,18 @@ def api_ok(h, obj):
 
 def serve_static(h, path):
     rel = path.lstrip("/")
+    # React 工作台（A′ 预构建产物，/ui/ → web/ui/）；其余仍走旧版 web/static/
+    if rel == "ui" or rel.startswith("ui/"):
+        sub = rel[3:].lstrip("/") or "index.html"
+        full = os.path.normpath(os.path.join(WEB_DIR, "ui", sub))
+        if not full.startswith(os.path.join(WEB_DIR, "ui")):
+            api_error(h, 403, "forbidden")
+            return
+        if not os.path.isfile(full):
+            api_error(h, 404, "not found: " + rel)
+            return
+        _send_static_file(h, full)
+        return
     if rel == "":
         rel = "index.html"
     elif rel.startswith("static/"):
@@ -258,6 +270,10 @@ def serve_static(h, path):
     if not os.path.isfile(full):
         api_error(h, 404, "not found: " + rel)
         return
+    _send_static_file(h, full)
+
+
+def _send_static_file(h, full):
     ext = os.path.splitext(full)[1].lstrip(".").lower()  # 去掉前导点，与 ctype dict key 对齐
     ctype = {"html": "text/html; charset=utf-8", "js": "application/javascript; charset=utf-8",
              "css": "text/css; charset=utf-8", "png": "image/png", "svg": "image/svg+xml",
@@ -289,7 +305,7 @@ class Handler(BaseHTTPRequestHandler):
         path = urllib.parse.unquote(parsed.path)
         segs = [s for s in path.split("/") if s]
         try:
-            if not segs or segs[0] in ("index.html", "static"):
+            if not segs or segs[0] in ("index.html", "static", "ui"):
                 serve_static(self, path)
                 return
             if segs[0] == "api":

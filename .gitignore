@@ -9,6 +9,10 @@ usage_log.jsonl
 # 章快照底账（R47，本机数据，随 R34 备份打包）
 **/_snapshots/
 
+# React 工作台（A′）：依赖与中间产物不入库；构建产物 web/ui/ 随仓库分发
+web/ui-src/node_modules/
+web/ui-src/dist/
+
 # Python
 __pycache__/
 *.pyc

@@ -1,0 +1,23 @@
+@import "tailwindcss";
+
+/* 设计 token（对标 shadcn 档位，品牌色沿用原暖橙） */
+@theme {
+  --color-paper: #f6f3ec;
+  --color-panel: #ffffff;
+  --color-line: #e7e1d3;
+  --color-ink: #2b2925;
+  --color-inksoft: #8a8578;
+  --color-brand: #b4532a;
+  --color-brand2: #d97a46;
+  --color-brandbg: #fbe9dd;
+  --color-ok: #2e7d32;
+  --color-okbg: #e8f4e6;
+  --color-warn: #b07b00;
+  --color-warnbg: #fef0d6;
+  --radius-card: 12px;
+}
+
+body {
+  @apply bg-paper text-ink antialiased;
+  font-family: "Microsoft YaHei", "PingFang SC", system-ui, sans-serif;
+}

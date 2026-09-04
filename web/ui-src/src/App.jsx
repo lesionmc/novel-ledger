@@ -38,11 +38,11 @@ export default function App() {
 
   return (
     <div className="flex min-h-screen flex-col">
-      {/* 深藏青顶栏 */}
-      <header className="sticky top-0 z-10 flex h-11 items-center gap-2.5 bg-topbar px-4 text-white">
+      {/* 浅色顶栏 */}
+      <header className="sticky top-0 z-10 flex h-11 items-center gap-2.5 border-b border-line bg-panel px-4 text-ink">
         <span className="h-2 w-2 rounded-full bg-accent" />
         <span className="text-[14px] font-bold tracking-wide">novel-ledger</span>
-        <span className="text-xs text-white/40">AI 小说创作台</span>
+        <span className="text-xs text-inksoft/80">AI 小说创作台</span>
       </header>
 
       <div className="flex flex-1">

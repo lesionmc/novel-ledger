@@ -6,20 +6,35 @@ import { api, apiPost } from "../api.js";
 const SYS_PROMPT = "你是中文网文资深策划/编辑，擅长把零碎灵感梳理成可执行的三件套（设定/角色卡/大纲）。对话风格简洁温和，多用「好的/嗯/有意思/继续」等口头词，每次回复不超过 80 字，多用 1-2 个追问推进用户表达。";
 const HELLO = "好的，咱们开始聊书。说说你心里这个故事大概是讲什么的？什么题材？有什么想写但一直没人陪你想透的点？";
 
+// 会话持久化（切页/刷新不丢）：对话、简报、三件套、书名全部存 sessionStorage
+const SS_KEY = "nl_wizard_v1";
+function loadState() {
+  try {
+    const d = JSON.parse(sessionStorage.getItem(SS_KEY) || "null");
+    if (d && Array.isArray(d.msgs) && d.msgs.length) return d;
+  } catch (e) {}
+  return { msgs: [{ role: "system", content: SYS_PROMPT }, { role: "assistant", content: HELLO }], brief: null, files: null, name: "" };
+}
+
 export default function NewWizard({ go }) {
-  const [msgs, setMsgs] = useState([
-    { role: "system", content: SYS_PROMPT },
-    { role: "assistant", content: HELLO },
-  ]);
+  const saved = loadState();
+  const [msgs, setMsgs] = useState(saved.msgs);
   const [input, setInput] = useState("");
   const [streaming, setStreaming] = useState(false);
-  const [brief, setBrief] = useState(null);
-  const [files, setFiles] = useState(null);
+  const [brief, setBrief] = useState(saved.brief);
+  const [files, setFiles] = useState(saved.files);
   const [tab, setTab] = useState("设定");
-  const [name, setName] = useState("");
+  const [name, setName] = useState(saved.name || "");
   const [status, setStatus] = useState("");
   const [done, setDone] = useState(false);
   const logRef = useRef(null);
+
+  // 变化即落 sessionStorage（对话可回溯：刷新页面还在）
+  useEffect(() => {
+    try {
+      sessionStorage.setItem(SS_KEY, JSON.stringify({ msgs, brief, files, name }));
+    } catch (e) {}
+  }, [msgs, brief, files, name]);
 
   useEffect(() => { if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight; }, [msgs]);
 
@@ -109,6 +124,8 @@ export default function NewWizard({ go }) {
       <div className="mb-4 flex flex-wrap items-center gap-2">
         <h1 className="mr-2 text-xl font-bold text-ink">新建书 · 和 AI 聊你的故事</h1>
         <span className="flex-1" />
+        <button onClick={() => { if (confirm("清空当前对话与三件套，重新开始？")) { sessionStorage.removeItem(SS_KEY); setMsgs([{ role: "system", content: SYS_PROMPT }, { role: "assistant", content: HELLO }]); setBrief(null); setFiles(null); setName(""); setDone(false); setStatus(""); } }}
+          className="rounded-lg border border-line bg-panel px-3 py-1.5 text-[13px] hover:border-ink/30">重开一局</button>
         <button onClick={genBrief} disabled={streaming} className="rounded-lg border border-line bg-panel px-3 py-1.5 text-[13px] hover:border-ink/30 disabled:opacity-40">提取书名/卖点</button>
         {brief && !files && (
           <button onClick={genFiles} disabled={streaming} className="rounded-lg border border-line bg-panel px-3 py-1.5 text-[13px] hover:border-ink/30 disabled:opacity-40">生成三件套</button>

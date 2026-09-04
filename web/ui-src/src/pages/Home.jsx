@@ -51,7 +51,7 @@ export default function Home({ go }) {
           const d = details[b];
           const ready = d?.has_state;
           return (
-            <div key={b} onClick={() => go("workspace")}
+            <div key={b} onClick={() => go("workspace", b)}
               className="flex cursor-pointer items-center gap-4 rounded-xl border border-line bg-panel px-5 py-4 shadow-sm transition hover:border-ink/25 hover:shadow">
               <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-brandbg text-[15px] font-bold text-ink">{b.slice(0, 1)}</div>
               <div>

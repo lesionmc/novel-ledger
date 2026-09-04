@@ -37,6 +37,7 @@ import re
 import shutil  # 建书复制 sample_book 必用（漏 import 会让建书/建书向导 500，2026-09-04 修复）
 import subprocess
 import sys
+import time
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -212,6 +213,20 @@ def chapter_list(p):
     return sorted((int(m.group(1)), m.group(0))
                   for m in (re.match(r"ch(\d+)\.md$", f) for f in os.listdir(ch_dir))
                   if m)
+
+
+def chapter_title(p, fname):
+    """取章节标题：正文第一行的 # 标题（去掉 # 前缀）；取不到返回空。"""
+    try:
+        with open(os.path.join(p, "chapters", fname), encoding="utf-8") as f:
+            for line in f:
+                s = line.strip()
+                if not s:
+                    continue
+                return re.sub(r"^#+\s*", "", s)[:40]
+    except Exception:
+        pass
+    return ""
 
 
 def read_text(p):
@@ -404,6 +419,23 @@ class Handler(BaseHTTPRequestHandler):
             if not p:
                 api_error(self, 404, "书不存在: " + name)
                 return
+            if len(segs) == 3 and segs[2] == "export":
+                # 导出全书：所有章节按序合并为一个 txt 下载
+                chs = chapter_list(p)
+                parts = [f"《{name}》\n导出时间：{time.strftime('%Y-%m-%d %H:%M')}\n共 {len(chs)} 章\n"]
+                for n, f in chs:
+                    body = read_text(os.path.join(p, "chapters", f)) or ""
+                    title = chapter_title(p, f)
+                    parts.append(f"\n\n{'=' * 24}\n第 {n} 章  {title}\n{'=' * 24}\n\n{body.strip()}")
+                data = "\n".join(parts).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "text/plain; charset=utf-8")
+                self.send_header("Content-Disposition", f"attachment; filename*=UTF-8''{urllib.parse.quote(name + '-全书.txt')}")
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+                return
+
             if len(segs) == 2:
                 snap_dir = os.path.join(p, "_snapshots")
                 snaps = sorted(f for f in (os.listdir(snap_dir) if os.path.isdir(snap_dir) else [])
@@ -418,8 +450,8 @@ class Handler(BaseHTTPRequestHandler):
                     overdue = []
                 api_ok(self, {
                     "name": name,
-                    "chapters": [{"no": n, "file": f,
-                                   "size": os.path.getsize(os.path.join(p, "chapters", f))}
+                    "chapters": [{"no": n, "file": f, "title": chapter_title(p, f),
+                                  "size": os.path.getsize(os.path.join(p, "chapters", f))}
                                  for n, f in chs],
                     "next_no": next_chapter_no(p),
                     "has_state": os.path.exists(os.path.join(p, "story_state.md")),
@@ -687,6 +719,25 @@ class Handler(BaseHTTPRequestHandler):
             write_settings(changes)
             api_ok(self, {"ok": True, "settings": public_settings(), "key_set": KEY_SET})
             return
+        if segs and segs[0] == "book" and len(segs) == 3 and segs[2] == "rename":
+            # 书名（文件夹名）重命名：快照/备份等随目录一起走
+            name = segs[1]
+            p = book_path(name)
+            if not p:
+                api_error(self, 404, "书不存在: " + name)
+                return
+            data = json.loads(self.rfile.read(int(self.headers.get("Content-Length") or 0)).decode("utf-8") or "{}")
+            new = (data.get("new") or "").strip()
+            if not new or re.search(r"[\\/]", new) or new in (".", "..") or new.startswith("_"):
+                api_error(self, 400, "新名字不合法（不能含斜杠/下划线开头）")
+                return
+            if os.path.exists(os.path.join(BOOKS_DIR, new)):
+                api_error(self, 400, "已存在同名书: " + new)
+                return
+            os.rename(p, os.path.join(BOOKS_DIR, new))
+            api_ok(self, {"ok": True, "name": new})
+            return
+
         if segs and segs[0] == "book" and len(segs) == 4:
             name = segs[1]
             p = book_path(name)

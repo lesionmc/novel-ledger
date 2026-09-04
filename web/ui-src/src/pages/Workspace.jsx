@@ -20,6 +20,9 @@ export default function Workspace({ autoOpen = null }) {
   const [outline, setOutline] = useState(null); // R32 闸口：{no, text}
   const [autoBk, setAutoBk] = useState(false);  // R34③：写完本章自动备份全书
   const [lastWrite, setLastWrite] = useState(null); // R31：{no, words, chars} 超限时出加长/精简按钮
+  const [fold, setFold] = useState({ ch: false, doc: false, rep: true }); // 树分组折叠
+  const [batch, setBatch] = useState(null);     // 批量写章弹窗：{start, count, words, done, fail}
+  const [preview, setPreview] = useState(false); // 编辑器 md 预览模式
 
   useEffect(() => { api("/api/books").then((r) => setBooks(r.books)).catch(() => {}); }, []);
 
@@ -97,11 +100,7 @@ export default function Workspace({ autoOpen = null }) {
     finally { setBusy(""); }
   }
 
-  function writeWithWords() {
-    const w = prompt("本章目标字数（1000–10000，确定=默认 3000）", "3000");
-    if (w === null) return;
-    runWrite(w === "" ? undefined : Number(w));
-  }
+
 
   async function doBackup() {
     if (busy || !book) return;
@@ -166,11 +165,48 @@ export default function Workspace({ autoOpen = null }) {
     finally { setBusy(""); }
   }
 
+  // 批量连写：从 start 起连写 count 章，每章 words 字（前端串行调 /write，逐章刷新）
+  async function runBatch(start, count, words) {
+    setBatch((b) => ({ ...b, running: true, done: 0, fail: 0, current: start }));
+    let fail = 0;
+    for (let i = 0; i < count; i++) {
+      const no = start + i;
+      try {
+        const d = await apiPost(`/api/book/${encodeURIComponent(book)}/write`, { no, words, auto_backup: autoBk });
+        if (!d.ok) { fail += 1; setLog(d.log || "引擎失败"); }
+        else {
+          setLastWrite({ no: d.no, words: d.words || words, chars: d.chars });
+          setLog(d.log || "");
+          setBody(d.body || ""); setSel({ kind: "ch", no: d.no }); setDirty(false);
+        }
+      } catch (e) { fail += 1; setMsg("第 " + no + " 章失败：" + e.message); }
+      setBatch((b) => ({ ...b, done: i + 1, fail, current: no + 1 }));
+    }
+    await openBook(book);
+    setMsg(`批量写章结束：完成 ${count - fail}/${count} 章` + (fail ? `（${fail} 章失败，详见引擎日志）` : " ✅"));
+    setTimeout(() => setBatch(null), 900);
+  }
+
+  async function renameBook() {
+    const nn = prompt(`把《${book}》重命名为：`, book);
+    if (!nn || nn.trim() === book) return;
+    try {
+      await api(`/api/book/${encodeURIComponent(book)}/rename`, {
+        method: "PUT", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ new: nn.trim() }),
+      });
+      setMsg(`已重命名为《${nn.trim()}》`);
+      setBook(null); setInfo(null); setSel(null); setBody("");
+      const r = await api("/api/books"); setBooks(r.books);
+    } catch (e) { setMsg("重命名失败：" + e.message); }
+  }
+
   const chapterNo = sel && sel.kind === "ch" ? sel.no : null;
   const actions = [
-    { label: "写下一章", primary: true, fn: writeWithWords, need: null },
+    { label: "写下一章", primary: true, fn: () => setBatch({ start: info?.next_no || 1, count: 1, words: 3000 }), need: null },
     { label: "出章纲+试写", fn: genOutline, need: null },
     { label: "备份全书", fn: doBackup, need: null },
+    { label: "导出全书 txt", fn: () => { window.open(`/api/book/${encodeURIComponent(book)}/export`, "_blank"); }, need: null },
     { label: "一致性审计", fn: () => run("一致性审计", () => apiPost(`/api/book/${encodeURIComponent(book)}/audit`, { no: chapterNo })), need: "ch" },
     { label: "全书体检", fn: () => run("全书体检", () => apiPost(`/api/book/${encodeURIComponent(book)}/scan`, {})), need: null },
     { label: "去味精判", fn: () => run("去味精判", () => apiPost(`/api/book/${encodeURIComponent(book)}/polish`, { no: chapterNo })), need: "ch" },
@@ -200,9 +236,12 @@ export default function Workspace({ autoOpen = null }) {
       )}
 
       <div className="grid grid-cols-12 gap-4">
-        {/* 左：书/章节/产物 树 */}
+        {/* 左：书/章节/产物 树（分组可折叠，章节显示「N 标题」） */}
         <div className="col-span-3 rounded-xl border border-line bg-panel p-3 shadow-sm">
-          <div className="mb-1 text-xs font-semibold text-inksoft">我的书</div>
+          <div className="mb-1 flex items-center justify-between text-xs font-semibold text-inksoft">
+            我的书
+            {book && <button onClick={renameBook} className="text-[11px] font-normal text-inksoft hover:text-ink">重命名</button>}
+          </div>
           {books.map((b) => (
             <div key={b} onClick={() => openBook(b)}
               className={`cursor-pointer rounded-md px-2 py-1 text-sm ${b === book ? "bg-brandbg font-semibold text-ink" : "hover:bg-line/40"}`}>
@@ -211,15 +250,26 @@ export default function Workspace({ autoOpen = null }) {
           ))}
           {book && info && (
             <>
-              <div className="mb-1 mt-3 text-xs font-semibold text-inksoft">章节（{info.chapters.length}）</div>
-              {info.chapters.map((c) => (
-                <div key={c.no} onClick={() => openSel({ kind: "ch", no: c.no })}
-                  className={`cursor-pointer rounded-md px-2 py-1 text-[13px] ${sel && sel.kind === "ch" && sel.no === c.no ? "bg-brandbg text-brand" : "hover:bg-line/40"}`}>
-                  ch{String(c.no).padStart(3, "0")}
+              <div onClick={() => setFold((f) => ({ ...f, ch: !f.ch }))}
+                className="mb-1 mt-3 flex cursor-pointer select-none items-center justify-between text-xs font-semibold text-inksoft hover:text-ink">
+                <span>章节（{info.chapters.length}）</span><span className="text-[10px]">{fold.ch ? "▸" : "▾"}</span>
+              </div>
+              {!fold.ch && (
+                <div className="max-h-[42vh] overflow-auto">
+                  {info.chapters.map((c) => (
+                    <div key={c.no} onClick={() => openSel({ kind: "ch", no: c.no })}
+                      className={`cursor-pointer truncate rounded-md px-2 py-1 text-[13px] ${sel && sel.kind === "ch" && sel.no === c.no ? "bg-brandbg text-brand" : "hover:bg-line/40"}`}
+                      title={c.title || ""}>
+                      {c.no} {c.title || ""}
+                    </div>
+                  ))}
                 </div>
-              ))}
-              <div className="mb-1 mt-3 text-xs font-semibold text-inksoft">文档</div>
-              {DOCS.map((d) => (
+              )}
+              <div onClick={() => setFold((f) => ({ ...f, doc: !f.doc }))}
+                className="mb-1 mt-3 flex cursor-pointer select-none items-center justify-between text-xs font-semibold text-inksoft hover:text-ink">
+                <span>文档</span><span className="text-[10px]">{fold.doc ? "▸" : "▾"}</span>
+              </div>
+              {!fold.doc && DOCS.map((d) => (
                 <div key={d} onClick={() => openSel({ kind: "doc", doc: d })}
                   className={`cursor-pointer rounded-md px-2 py-1 text-[13px] ${sel && sel.kind === "doc" && sel.doc === d ? "bg-brandbg text-brand" : "hover:bg-line/40"}`}>
                   {DOC_LABEL[d]}
@@ -227,15 +277,20 @@ export default function Workspace({ autoOpen = null }) {
               ))}
               {reports.length > 0 && (
                 <>
-                  <div className="mb-1 mt-3 text-xs font-semibold text-inksoft">报告/产物</div>
-                  <div className="max-h-40 overflow-auto">
-                    {reports.map((f) => (
-                      <div key={f.file} onClick={() => openSel({ kind: "report", file: f.file })}
-                        className={`cursor-pointer rounded-md px-2 py-1 text-[12px] ${sel && sel.kind === "report" && sel.file === f.file ? "bg-brandbg text-brand" : "hover:bg-line/40"}`}>
-                        {f.file.replace("chapters/", "")}
-                      </div>
-                    ))}
+                  <div onClick={() => setFold((f) => ({ ...f, rep: !f.rep }))}
+                    className="mb-1 mt-3 flex cursor-pointer select-none items-center justify-between text-xs font-semibold text-inksoft hover:text-ink">
+                    <span>报告/产物（{reports.length}）</span><span className="text-[10px]">{fold.rep ? "▸" : "▾"}</span>
                   </div>
+                  {!fold.rep && (
+                    <div className="max-h-40 overflow-auto">
+                      {reports.map((f) => (
+                        <div key={f.file} onClick={() => openSel({ kind: "report", file: f.file })}
+                          className={`cursor-pointer rounded-md px-2 py-1 text-[12px] ${sel && sel.kind === "report" && sel.file === f.file ? "bg-brandbg text-brand" : "hover:bg-line/40"}`}>
+                          {f.file.replace("chapters/", "")}
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </>
               )}
             </>
@@ -246,17 +301,31 @@ export default function Workspace({ autoOpen = null }) {
         <div className="col-span-6 rounded-xl border border-line bg-panel p-3 shadow-sm">
           <div className="mb-2 flex items-center justify-between">
             <div className="text-sm font-semibold">{title()}</div>
-            {sel && (sel.kind === "ch" || sel.kind === "doc") && (
-              <button onClick={save} disabled={busy || !dirty}
-                className="rounded-lg border border-line px-3 py-1 text-xs disabled:opacity-40 hover:border-brand2 hover:text-brand">
-                保存{dirty ? " *" : ""}
-              </button>
-            )}
+            <div className="flex items-center gap-1.5">
+              {sel && (sel.kind === "ch" || sel.kind === "doc") && (
+                <button onClick={() => setPreview((p) => !p)}
+                  className="rounded-lg border border-line px-2.5 py-1 text-xs hover:border-ink/30">
+                  {preview ? "编辑" : "预览"}
+                </button>
+              )}
+              {sel && (sel.kind === "ch" || sel.kind === "doc") && (
+                <button onClick={save} disabled={busy || !dirty}
+                  className="rounded-lg border border-line px-3 py-1 text-xs disabled:opacity-40 hover:border-ink/30">
+                  保存{dirty ? " *" : ""}
+                </button>
+              )}
+            </div>
           </div>
           {sel && (sel.kind === "ch" || sel.kind === "doc") ? (
-            <textarea value={body} spellCheck={false}
-              onChange={(e) => { setBody(e.target.value); setDirty(true); }}
-              className="h-[62vh] w-full resize-y rounded-lg border border-line bg-paper p-4 font-serif text-[15px] leading-8 focus:outline-none focus:ring-2 focus:ring-brandbg" />
+            preview ? (
+              <div className="h-[62vh] overflow-auto rounded-lg border border-line bg-paper p-5 text-[15px] leading-8">
+                <MdLite text={body} />
+              </div>
+            ) : (
+              <textarea value={body} spellCheck={false}
+                onChange={(e) => { setBody(e.target.value); setDirty(true); }}
+                className="h-[62vh] w-full resize-y rounded-lg border border-line bg-paper p-4 font-serif text-[15px] leading-8 focus:outline-none focus:ring-2 focus:ring-brandbg" />
+            )
           ) : sel && sel.kind === "report" ? (
             <pre className="h-[62vh] overflow-auto whitespace-pre-wrap rounded-lg border border-line bg-paper p-4 text-[13px] leading-6">{body}</pre>
           ) : (
@@ -289,12 +358,9 @@ export default function Workspace({ autoOpen = null }) {
               ⏳ {busy}中…（写章约 1-3 分钟，请勿关闭）
             </div>
           )}
-          <div className="mt-4 rounded-lg bg-paper p-3 text-[11px] leading-5 text-inksoft">
-            规矩：先审计后去味；apply 后必须重新体检；账本冲突（⚠）要人工裁决后才能续写。
-          </div>
-          <label className="mt-2 flex items-center gap-2 text-xs text-inksoft">
-            <input type="checkbox" checked={autoBk} onChange={(e) => setAutoBk(e.target.checked)} />
-            写完本章自动备份全书 zip（R34③，backups/ 留最近 10 份）
+          <label className="mt-3 flex items-start gap-2 text-xs text-inksoft">
+            <input type="checkbox" checked={autoBk} onChange={(e) => setAutoBk(e.target.checked)} className="mt-0.5" />
+            写完本章自动备份全书 zip
           </label>
           {outline && (
             <div className="fixed inset-0 z-50 flex items-center justify-center bg-ink/50" onClick={() => setOutline(null)}>
@@ -321,8 +387,53 @@ export default function Workspace({ autoOpen = null }) {
                   <button onClick={() => setOutline(null)} className="text-sm text-inksoft hover:text-ink">稍后再说</button>
                 </div>
                 <p className="mt-2 text-[11px] text-inksoft">
-                  写正文时本章纲自动注入并强制遵循（R32）；保存的章纲进入创作痕迹链（R46）。
+                  写正文时本章纲自动注入并强制遵循；保存的章纲进入创作痕迹链。
                 </p>
+              </div>
+            </div>
+          )}
+
+          {/* 批量写章弹窗：从第 N 章起连写 M 章，每章 X 字 */}
+          {batch && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-ink/50" onClick={() => !batch.running && setBatch(null)}>
+              <div className="w-[400px] max-w-[92vw] rounded-2xl bg-panel p-5 shadow-xl" onClick={(e) => e.stopPropagation()}>
+                {batch.running ? (
+                  <>
+                    <h3 className="mb-3 text-sm font-bold text-ink">批量写章中…</h3>
+                    <div className="mb-3 h-2 overflow-auto rounded-full bg-line">
+                      <div className="h-full bg-brand transition-all" style={{ width: `${Math.round((batch.done / batch.count) * 100)}%` }} />
+                    </div>
+                    <div className="text-[13px] text-inksoft">
+                      正在写第 {batch.current} 章（{batch.done}/{batch.count}）{batch.fail ? ` · 失败 ${batch.fail}` : ""}
+                    </div>
+                    <div className="mt-2 text-xs text-inksoft/70">每章约 1-3 分钟（正文 + 账本更新），期间请勿关闭页面</div>
+                  </>
+                ) : (
+                  <>
+                    <h3 className="mb-1 text-sm font-bold text-ink">写下一章</h3>
+                    <p className="mb-4 text-xs text-inksoft">可以一次连写多章（逐章过账本闸口，速度约 2-4 分钟/章）</p>
+                    <label className="mb-3 block text-[13px] text-ink">
+                      从第几章开始
+                      <input type="number" min="1" value={batch.start} onChange={(e) => setBatch({ ...batch, start: parseInt(e.target.value) || 1 })}
+                        className="mt-1 w-full" />
+                    </label>
+                    <label className="mb-3 block text-[13px] text-ink">
+                      连写几章（1-10）
+                      <input type="number" min="1" max="10" value={batch.count} onChange={(e) => setBatch({ ...batch, count: Math.max(1, Math.min(10, parseInt(e.target.value) || 1)) })}
+                        className="mt-1 w-full" />
+                    </label>
+                    <label className="mb-4 block text-[13px] text-ink">
+                      每章目标字数（1000-10000）
+                      <input type="number" min="1000" max="10000" step="500" value={batch.words} onChange={(e) => setBatch({ ...batch, words: Math.max(1000, Math.min(10000, parseInt(e.target.value) || 3000)) })}
+                        className="mt-1 w-full" />
+                    </label>
+                    <div className="flex justify-end gap-2">
+                      <button onClick={() => setBatch(null)} className="rounded-lg border border-line px-3.5 py-1.5 text-[13px] hover:border-ink/30">取消</button>
+                      <button onClick={() => runBatch(batch.start, batch.count, batch.words)}
+                        className="rounded-lg bg-brand px-4 py-1.5 text-[13px] font-medium text-white hover:bg-brand2">开写</button>
+                    </div>
+                  </>
+                )}
               </div>
             </div>
           )}
@@ -330,4 +441,33 @@ export default function Workspace({ autoOpen = null }) {
       </div>
     </div>
   );
+}
+
+/* 极简 Markdown 渲染（标题/粗体/引用/分隔线/段落），够看小说与三件套 */
+function MdLite({ text }) {
+  const lines = (text || "").split("\n");
+  const out = [];
+  let para = [];
+  const flush = () => {
+    if (para.length) { out.push(<p key={out.length} className="my-3 whitespace-pre-wrap">{inline(para.join("\n"))}</p>); para = []; }
+  };
+  const inline = (s) => {
+    const parts = s.split(/(\*\*[^*]+\*\*|\*[^*]+\*)/g);
+    return parts.map((p, i) =>
+      p.startsWith("**") ? <b key={i}>{p.slice(2, -2)}</b> : (p.startsWith("*") && p.endsWith("*") && p.length > 2 ? <i key={i}>{p.slice(1, -1)}</i> : p));
+  };
+  for (const raw of lines) {
+    const l = raw.trimEnd();
+    const h = l.match(/^(#{1,4})\s+(.*)/);
+    if (h) { flush(); const lv = h[1].length; out.push(
+      lv === 1 ? <h2 key={out.length} className="mb-3 mt-5 text-xl font-bold text-ink">{inline(h[2])}</h2>
+      : lv === 2 ? <h3 key={out.length} className="mb-2 mt-4 text-[17px] font-bold text-ink">{inline(h[2])}</h3>
+      : <h4 key={out.length} className="mb-2 mt-3 text-[15px] font-semibold text-ink">{inline(h[2])}</h4>);
+    } else if (/^={3,}$|^---+$/.test(l)) { flush(); out.push(<hr key={out.length} className="my-4 border-line" />); }
+    else if (l.startsWith(">")) { flush(); out.push(<blockquote key={out.length} className="my-2 border-l-2 border-line pl-3 text-inksoft">{inline(l.replace(/^>\s?/, ""))}</blockquote>); }
+    else if (l === "") { flush(); }
+    else { para.push(l); }
+  }
+  flush();
+  return <div>{out}</div>;
 }

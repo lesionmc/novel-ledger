@@ -33,16 +33,19 @@ export default function Snapshots() {
 
   return (
     <div>
-      <h1 className="mb-1 text-2xl font-bold text-brand">🗄 快照底账</h1>
-      <p className="mb-5 text-sm text-inksoft">
-        每章账本更新成功后自动存档（R47，永不清理）。将来「从第 N 章重算」（R49）拿它当起点。
+      <h1 className="mb-1 text-xl font-bold text-ink">快照底账</h1>
+      <p className="mb-1 text-[13px] text-inksoft">
+        AI 每写完一章，会把「当时的完整记忆」复印一份存底——相当于给每章存了个游戏存档。
+      </p>
+      <p className="mb-4 text-xs text-inksoft/80">
+        有什么用：改了前面的剧情、或账本坏了想重算时，可以从某一章的存档倒回去重来，不用从头写。
       </p>
 
       <div className="mb-4 flex flex-wrap gap-2">
         {books.map((b) => (
           <button key={b} onClick={() => pick(b)}
-            className={`rounded-lg px-3 py-1.5 text-sm ${b === book ? "bg-brand text-white" : "border border-line bg-panel hover:border-brand2"}`}>
-            📖 {b}
+            className={`rounded-lg px-3 py-1.5 text-[13px] ${b === book ? "bg-brand text-white" : "border border-line bg-panel hover:border-ink/30"}`}>
+            {b}
           </button>
         ))}
       </div>
@@ -55,7 +58,7 @@ export default function Snapshots() {
             {snaps.map((f) => (
               <div key={f} onClick={() => openSnap(f)}
                 className={`cursor-pointer rounded-md px-2 py-1.5 text-[13px] ${sel === f ? "bg-brandbg font-semibold text-brand" : "hover:bg-line/40"}`}>
-                🗄 {f}
+                {f}
               </div>
             ))}
           </div>

@@ -19,7 +19,7 @@ export default function Usage() {
 
   return (
     <div>
-      <h1 className="mb-1 text-2xl font-bold text-brand">📊 用量统计</h1>
+      <h1 className="mb-1 text-2xl font-bold text-brand">用量统计</h1>
       <p className="mb-5 text-sm text-inksoft">本地流水 · 不查厂商 · 不折算钱。每章平均可用于估算压测成本。</p>
 
       <div className="mb-6 grid grid-cols-2 gap-3 md:grid-cols-4">

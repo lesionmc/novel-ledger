@@ -107,55 +107,56 @@ export default function NewWizard({ go }) {
   return (
     <div>
       <div className="mb-4 flex flex-wrap items-center gap-2">
-        <h1 className="mr-2 text-2xl font-bold text-brand">✨ 新建书 · 和 AI 聊你的故事</h1>
+        <h1 className="mr-2 text-xl font-bold text-ink">新建书 · 和 AI 聊你的故事</h1>
         <span className="flex-1" />
-        <button onClick={() => go("home")} className="rounded-lg border border-line bg-panel px-3 py-1.5 text-sm hover:border-brand2">← 返回首页</button>
-        <button onClick={genBrief} disabled={streaming} className="rounded-lg border border-line bg-panel px-3 py-1.5 text-sm hover:border-brand2 disabled:opacity-40">💡 让 AI 提取书名/卖点</button>
+        <button onClick={genBrief} disabled={streaming} className="rounded-lg border border-line bg-panel px-3 py-1.5 text-[13px] hover:border-ink/30 disabled:opacity-40">提取书名/卖点</button>
         {brief && !files && (
-          <button onClick={genFiles} disabled={streaming} className="rounded-lg border border-line bg-panel px-3 py-1.5 text-sm hover:border-brand2 disabled:opacity-40">🧬 生成三件套</button>
+          <button onClick={genFiles} disabled={streaming} className="rounded-lg border border-line bg-panel px-3 py-1.5 text-[13px] hover:border-ink/30 disabled:opacity-40">生成三件套</button>
         )}
         {files && (
-          <button onClick={createBook} disabled={streaming || done} className="rounded-lg bg-brand px-3.5 py-1.5 text-sm text-white hover:bg-brand2 disabled:opacity-40">📚 创建并初始化</button>
+          <button onClick={createBook} disabled={streaming || done} className="rounded-lg bg-brand px-3.5 py-1.5 text-[13px] text-white hover:bg-brand2 disabled:opacity-40">创建并初始化</button>
         )}
       </div>
-      {status && <div className="mb-3 rounded-lg bg-brandbg px-4 py-2 text-sm text-brand">{status}</div>}
+      {status && <div className="mb-3 rounded-lg bg-brandbg px-4 py-2 text-[13px] text-ink">{status}</div>}
 
       <div className="grid gap-4 lg:grid-cols-5">
         {/* 左：聊天 */}
         <div className="flex flex-col rounded-xl border border-line bg-panel p-4 shadow-sm lg:col-span-3">
-          <h3 className="mb-2 text-sm font-semibold text-brand">💬 跟 AI 聊</h3>
-          <div ref={logRef} className="h-[52vh] overflow-auto rounded-lg border border-line bg-paper p-3 text-[13.5px] leading-6">
+          <h3 className="mb-2 text-[13px] font-semibold text-inksoft">跟 AI 聊</h3>
+          <div ref={logRef} className="h-[50vh] overflow-auto rounded-lg border border-line bg-paper p-3 text-[13.5px] leading-6">
             {msgs.filter((m) => m.role !== "system").map((m, i) => (
-              <div key={i} className={`mb-2.5 rounded-lg px-3 py-2 ${m.role === "user" ? "bg-brandbg" : m.role === "assistant" ? "bg-line/50" : ""}`}>
-                <div className="mb-0.5 text-[11px] text-inksoft">{m.role === "user" ? "你" : m.role === "assistant" ? "AI" : ""}</div>
-                {m.content ? m.content.split("\n").map((l, j) => <div key={j}>{l}</div>) : <span className="cursor">▍</span>}
+              <div key={i} className={`mb-2.5 max-w-[92%] rounded-lg px-3 py-2 ${m.role === "user" ? "ml-auto bg-brandbg" : m.role === "assistant" ? "bg-line/40" : ""}`}>
+                {m.role !== "user" && <div className="mb-0.5 text-[11px] text-inksoft">AI</div>}
+                {m.content ? m.content.split("\n").map((l, j) => <div key={j}>{l}</div>)
+                  : <span className="inline-flex items-center gap-1.5 text-inksoft"><span className="h-1.5 w-1.5 animate-ping rounded-full bg-accent" />AI 生成中…</span>}
               </div>
             ))}
-            {streaming && <span className="text-brand">▍</span>}
           </div>
-          <div className="mt-2 flex gap-2">
+          <div className="mt-2">
             <textarea value={input} onChange={(e) => setInput(e.target.value)}
-              onKeyDown={(e) => { if ((e.ctrlKey || e.metaKey) && e.key === "Enter") send(); }}
-              placeholder="说说你想写什么故事（Ctrl+Enter 发送）"
-              className="h-14 resize-none" />
-            <button onClick={send} disabled={streaming}
-              className="shrink-0 rounded-lg bg-brand px-4 text-sm text-white hover:bg-brand2 disabled:opacity-40">发送 ▶</button>
+              onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } }}
+              placeholder="说说你想写什么故事…（Enter 发送，Shift+Enter 换行）"
+              className="h-24 w-full resize-none" />
+            <div className="mt-2 flex justify-end">
+              <button onClick={send} disabled={streaming || !input.trim()}
+                className="rounded-lg bg-brand px-5 py-2 text-[13px] font-medium text-white hover:bg-brand2 disabled:opacity-40">发送</button>
+            </div>
           </div>
         </div>
 
         {/* 右：三件套预览/编辑 */}
         <div className="flex flex-col rounded-xl border border-line bg-panel p-4 shadow-sm lg:col-span-2">
-          <h3 className="mb-2 text-sm font-semibold text-brand">📑 三件套预览</h3>
-          <div className="mb-3 rounded-lg border border-brand2 bg-brandbg p-3 text-[13px]">
+          <h3 className="mb-2 text-[13px] font-semibold text-inksoft">三件套预览</h3>
+          <div className="mb-3 rounded-lg border border-line bg-paper p-3 text-[13px]">
             {brief ? (
               <>
-                <div><b className="text-brand">书名：</b>{brief.name || "-"}</div>
-                <div><b className="text-brand">题材：</b>{brief.genre || "-"}</div>
-                <div><b className="text-brand">卖点：</b>{brief.hook || "-"}</div>
-                <div className="mt-1 text-[11px] text-inksoft">可继续聊，提取按钮可重复点</div>
+                <div><b className="text-ink">书名：</b>{brief.name || "-"}</div>
+                <div><b className="text-ink">题材：</b>{brief.genre || "-"}</div>
+                <div><b className="text-ink">卖点：</b>{brief.hook || "-"}</div>
+                <div className="mt-1 text-[11px] text-inksoft">可继续聊，「提取书名/卖点」可重复点</div>
               </>
             ) : (
-              <span className="text-inksoft">点上方「💡 让 AI 提取书名/卖点」后，此处显示摘要…</span>
+              <span className="text-inksoft">点右上「提取书名/卖点」后，此处显示摘要…</span>
             )}
           </div>
           {files ? (

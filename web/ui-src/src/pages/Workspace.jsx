@@ -4,7 +4,7 @@ import { api, apiPost, apiPut, usageFromLog, fmt } from "../api.js";
 /* 章节与账本页（工作台核心）：书树 | 编辑器/报告 | 动作面板 */
 
 const DOCS = ["设定", "角色卡", "大纲", "state"];
-const DOC_LABEL = { 设定: "📄 设定.md", 角色卡: "👤 角色卡.md", 大纲: "🗺 大纲.md", state: "📒 记忆账本" };
+const DOC_LABEL = { 设定: "设定.md", 角色卡: "角色卡.md", 大纲: "大纲.md", state: "记忆账本" };
 
 export default function Workspace({ autoOpen = null }) {
   const [books, setBooks] = useState([]);
@@ -108,7 +108,7 @@ export default function Workspace({ autoOpen = null }) {
     setBusy("备份全书"); setMsg("");
     try {
       const d = await apiPost(`/api/book/${encodeURIComponent(book)}/backup`, {});
-      setMsg(d.ok ? `📦 备份完成 → ${d.path}` : "备份失败：" + (d.log || ""));
+      setMsg(d.ok ? `备份完成 → ${d.path}` : "备份失败：" + (d.log || ""));
     } catch (e) { setMsg("备份失败：" + e.message); }
     finally { setBusy(""); }
   }
@@ -168,20 +168,20 @@ export default function Workspace({ autoOpen = null }) {
 
   const chapterNo = sel && sel.kind === "ch" ? sel.no : null;
   const actions = [
-    { label: "✍ 写下一章", primary: true, fn: writeWithWords, need: null },
-    { label: "🧭 出章纲+试写", fn: genOutline, need: null },
-    { label: "📦 备份全书", fn: doBackup, need: null },
-    { label: "🧾 一致性审计", fn: () => run("一致性审计", () => apiPost(`/api/book/${encodeURIComponent(book)}/audit`, { no: chapterNo })), need: "ch" },
-    { label: "🔬 全书体检", fn: () => run("全书体检", () => apiPost(`/api/book/${encodeURIComponent(book)}/scan`, {})), need: null },
-    { label: "🪄 去味精判", fn: () => run("去味精判", () => apiPost(`/api/book/${encodeURIComponent(book)}/polish`, { no: chapterNo })), need: "ch" },
-    { label: "✂️ 应用改写", fn: () => { if (confirm("应用改写会修改正文（自动备份到 .bak.md）。继续？")) return run("应用改写", () => apiPost(`/api/book/${encodeURIComponent(book)}/apply`, { no: chapterNo })); }, need: "ch" },
+    { label: "写下一章", primary: true, fn: writeWithWords, need: null },
+    { label: "出章纲+试写", fn: genOutline, need: null },
+    { label: "备份全书", fn: doBackup, need: null },
+    { label: "一致性审计", fn: () => run("一致性审计", () => apiPost(`/api/book/${encodeURIComponent(book)}/audit`, { no: chapterNo })), need: "ch" },
+    { label: "全书体检", fn: () => run("全书体检", () => apiPost(`/api/book/${encodeURIComponent(book)}/scan`, {})), need: null },
+    { label: "去味精判", fn: () => run("去味精判", () => apiPost(`/api/book/${encodeURIComponent(book)}/polish`, { no: chapterNo })), need: "ch" },
+    { label: "应用改写", fn: () => { if (confirm("应用改写会修改正文（自动备份到 .bak.md）。继续？")) return run("应用改写", () => apiPost(`/api/book/${encodeURIComponent(book)}/apply`, { no: chapterNo })); }, need: "ch" },
   ];
 
   function title() {
     if (!sel) return book ? "从左侧选择章节或文档" : "从左侧选择一本书";
     if (sel.kind === "ch") return `ch${String(sel.no).padStart(3, "0")}.md · ${fmt(body.length)} 字`;
     if (sel.kind === "doc") return DOC_LABEL[sel.doc] + ` · ${fmt(body.length)} 字`;
-    return "🧾 " + sel.file.replace("chapters/", "");
+    return sel.file.replace("chapters/", "");
   }
 
   return (
@@ -202,23 +202,23 @@ export default function Workspace({ autoOpen = null }) {
       <div className="grid grid-cols-12 gap-4">
         {/* 左：书/章节/产物 树 */}
         <div className="col-span-3 rounded-xl border border-line bg-panel p-3 shadow-sm">
-          <div className="mb-1 text-xs font-semibold text-inksoft">📚 我的书</div>
+          <div className="mb-1 text-xs font-semibold text-inksoft">我的书</div>
           {books.map((b) => (
             <div key={b} onClick={() => openBook(b)}
-              className={`cursor-pointer rounded-md px-2 py-1 text-sm ${b === book ? "bg-brandbg font-semibold text-brand" : "hover:bg-line/40"}`}>
-              📖 {b}
+              className={`cursor-pointer rounded-md px-2 py-1 text-sm ${b === book ? "bg-brandbg font-semibold text-ink" : "hover:bg-line/40"}`}>
+              {b}
             </div>
           ))}
           {book && info && (
             <>
-              <div className="mb-1 mt-3 text-xs font-semibold text-inksoft">📑 章节（{info.chapters.length}）</div>
+              <div className="mb-1 mt-3 text-xs font-semibold text-inksoft">章节（{info.chapters.length}）</div>
               {info.chapters.map((c) => (
                 <div key={c.no} onClick={() => openSel({ kind: "ch", no: c.no })}
                   className={`cursor-pointer rounded-md px-2 py-1 text-[13px] ${sel && sel.kind === "ch" && sel.no === c.no ? "bg-brandbg text-brand" : "hover:bg-line/40"}`}>
                   ch{String(c.no).padStart(3, "0")}
                 </div>
               ))}
-              <div className="mb-1 mt-3 text-xs font-semibold text-inksoft">📄 文档</div>
+              <div className="mb-1 mt-3 text-xs font-semibold text-inksoft">文档</div>
               {DOCS.map((d) => (
                 <div key={d} onClick={() => openSel({ kind: "doc", doc: d })}
                   className={`cursor-pointer rounded-md px-2 py-1 text-[13px] ${sel && sel.kind === "doc" && sel.doc === d ? "bg-brandbg text-brand" : "hover:bg-line/40"}`}>
@@ -227,7 +227,7 @@ export default function Workspace({ autoOpen = null }) {
               ))}
               {reports.length > 0 && (
                 <>
-                  <div className="mb-1 mt-3 text-xs font-semibold text-inksoft">🧾 报告/产物</div>
+                  <div className="mb-1 mt-3 text-xs font-semibold text-inksoft">报告/产物</div>
                   <div className="max-h-40 overflow-auto">
                     {reports.map((f) => (
                       <div key={f.file} onClick={() => openSel({ kind: "report", file: f.file })}
@@ -249,7 +249,7 @@ export default function Workspace({ autoOpen = null }) {
             {sel && (sel.kind === "ch" || sel.kind === "doc") && (
               <button onClick={save} disabled={busy || !dirty}
                 className="rounded-lg border border-line px-3 py-1 text-xs disabled:opacity-40 hover:border-brand2 hover:text-brand">
-                💾 保存{dirty ? " *" : ""}
+                保存{dirty ? " *" : ""}
               </button>
             )}
           </div>
@@ -272,7 +272,7 @@ export default function Workspace({ autoOpen = null }) {
 
         {/* 右：动作面板 */}
         <div className="col-span-3 rounded-xl border border-line bg-panel p-3 shadow-sm">
-          <div className="mb-2 text-xs font-semibold text-inksoft">⚡ 动作</div>
+          <div className="mb-2 text-xs font-semibold text-inksoft">动作</div>
           <div className="flex flex-col gap-2">
             {actions.map((a) => {
               const disabled = !!busy || !book || (a.need === "ch" && !chapterNo);
@@ -300,7 +300,7 @@ export default function Workspace({ autoOpen = null }) {
             <div className="fixed inset-0 z-50 flex items-center justify-center bg-ink/50" onClick={() => setOutline(null)}>
               <div className="w-[760px] max-w-[94vw] rounded-2xl bg-panel p-5 shadow-xl" onClick={(e) => e.stopPropagation()}>
                 <div className="mb-2 flex items-center justify-between">
-                  <h3 className="text-sm font-bold text-brand">🧭 闸口确认 · ch{String(outline.no).padStart(3, "0")} 章纲 + 试写（R32）</h3>
+                  <h3 className="text-sm font-bold text-brand">闸口确认 · ch{String(outline.no).padStart(3, "0")} 章纲 + 试写（R32）</h3>
                   <button onClick={() => setOutline(null)} className="text-sm text-inksoft hover:text-ink">✕</button>
                 </div>
                 {info && info.overdue && info.overdue.length > 0 && (
@@ -314,9 +314,9 @@ export default function Workspace({ autoOpen = null }) {
                 <textarea value={outline.text} onChange={(e) => setOutline({ ...outline, text: e.target.value })}
                   className="h-[42vh] w-full resize-none font-mono text-[13px]" />
                 <div className="mt-3 flex items-center gap-2">
-                  <button onClick={savePlan} className="rounded-lg border border-line px-3 py-1.5 text-sm hover:border-brand2">💾 保存章纲修改</button>
+                  <button onClick={savePlan} className="rounded-lg border border-line px-3 py-1.5 text-sm hover:border-brand2">保存章纲修改</button>
                   <button onClick={writeFromPlan} disabled={busy}
-                    className="rounded-lg bg-brand px-4 py-1.5 text-sm text-white hover:bg-brand2 disabled:opacity-40">✅ 按此章纲写正文</button>
+                    className="rounded-lg bg-brand px-4 py-1.5 text-sm text-white hover:bg-brand2 disabled:opacity-40">按此章纲写正文</button>
                   <span className="flex-1" />
                   <button onClick={() => setOutline(null)} className="text-sm text-inksoft hover:text-ink">稍后再说</button>
                 </div>

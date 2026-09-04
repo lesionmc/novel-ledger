@@ -235,6 +235,23 @@ try:
 finally:
     shutil.rmtree(_tmpdir, ignore_errors=True)
 
+# ── 8. 章快照（R47） ───────────────────────────────────────────
+print("\n== 8. 章快照 ==")
+_snapbook = tempfile.mkdtemp(prefix="snapbook_")
+try:
+    out = write_chapter.snapshot_state(_snapbook, 7, "## 当前时间\n- 测试账本")
+    p = os.path.join(_snapbook, "_snapshots", "ch007.state.md")
+    check("快照落盘且命名 chXXX.state.md", out == p and os.path.exists(p), str(out))
+    with open(p, encoding="utf-8") as f:
+        check("快照内容与账本一致", f.read() == "## 当前时间\n- 测试账本")
+    blocker = os.path.join(_snapbook, "blocked")  # 用一个"文件"冒充目录，制造写盘失败
+    with open(blocker, "w", encoding="utf-8") as f:
+        f.write("占位")
+    check("快照失败不抛异常（返回空串）",
+          write_chapter.snapshot_state(blocker, 1, "x") == "")
+finally:
+    shutil.rmtree(_snapbook, ignore_errors=True)
+
 # ── 汇总 ───────────────────────────────────────────────────────
 print(f"\n{'=' * 40}\n结果：{PASS} 通过 / {FAIL} 失败")
 if FAIL:

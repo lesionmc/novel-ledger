@@ -6,6 +6,9 @@
 # 模型用量流水（R48，本机数据）
 usage_log.jsonl
 
+# 章快照底账（R47，本机数据，随 R34 备份打包）
+**/_snapshots/
+
 # Python
 __pycache__/
 *.pyc

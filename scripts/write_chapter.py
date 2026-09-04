@@ -318,6 +318,23 @@ def call_llm(api_key: str, base_url: str, model: str, user_content: str,
         return _try_channel(fb_key, fb_url, fb_model, "备用模型")
 
 
+def snapshot_state(book_dir: str, chapter: int, state_text: str) -> str:
+    """R47 章快照：账本更新成功后，把当时这份账本复印一份存到底账目录。
+    _snapshots/chXXX.state.md —— 永不清理（拍板 Q16）；「从第 N 章重算」（R49，v0.3）拿它当起点。
+    快照失败只警告不阻断主流程（账本本身已写盘，快照是加分项）。"""
+    try:
+        snap_dir = os.path.join(book_dir, "_snapshots")
+        os.makedirs(snap_dir, exist_ok=True)
+        out = os.path.join(snap_dir, f"ch{chapter:03d}.state.md")
+        with open(out, "w", encoding="utf-8") as f:
+            f.write(state_text)
+        print(f"     快照已存 → {out}")
+        return out
+    except OSError as e:
+        print(f"⚠ 快照写入失败（不影响账本）：{e}", file=sys.stderr)
+        return ""
+
+
 def update_state(api_key: str, base_url: str, model: str, body: str,
                  old_state: str, reasoning_effort: str = "low",
                  usage_meta: dict = None) -> str:
@@ -498,7 +515,8 @@ def main() -> int:
         if miss:
             print(f"⚠ [state] 账本结构校验未通过：缺少小节 {miss}。"
                   f"重算产物仍不合格，请人工修复 {state_path}。", file=sys.stderr)
-            return 1
+            return 1  # 坏账本不进快照链（R49 重算要拿它当起点）
+        snapshot_state(book_dir, args.chapter, new_state)
         return 0
 
     # 主流程：写正文 → 更新账本
@@ -531,6 +549,8 @@ def main() -> int:
             # 正文已成功产出，账本残缺不阻断，但必须大声警告（防 CH-26 复发）
             print(f"⚠ 账本结构校验未通过：缺少小节 {miss}。"
                   f"请人工修复 {state_path} 或重跑 --state-only 重算，再写下一章。", file=sys.stderr)
+        else:
+            snapshot_state(book_dir, args.chapter, new_state)  # R47：校验通过才进快照链
     else:
         print("     （--no-state：跳过账本更新）")
 

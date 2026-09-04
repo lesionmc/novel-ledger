@@ -1,25 +1,35 @@
 @import "tailwindcss";
 
-/* 设计 token（对标 shadcn 档位，品牌色沿用原暖橙） */
+/* 设计 token —— 对标 AI-Novel-Writing-Assistant 观感：
+   深藏青主色 + 冷灰中性色 + 绿/蓝状态徽章 + 白卡片浅灰底 */
 @theme {
-  --color-paper: #f6f3ec;
+  --color-paper: #f5f6f8;
   --color-panel: #ffffff;
-  --color-line: #e7e1d3;
-  --color-ink: #2b2925;
-  --color-inksoft: #8a8578;
-  --color-brand: #b4532a;
-  --color-brand2: #d97a46;
-  --color-brandbg: #fbe9dd;
-  --color-ok: #2e7d32;
-  --color-okbg: #e8f4e6;
-  --color-warn: #b07b00;
-  --color-warnbg: #fef0d6;
-  --color-err: #b0341d;
-  --color-errbg: #fbe5df;
+  --color-line: #e5e7eb;
+  --color-ink: #171923;
+  --color-inksoft: #70757f;
+  --color-brand: #171923;   /* 主色=深藏青：主按钮/强调（对齐竞品） */
+  --color-brand2: #2b303c;  /* 主色 hover */
+  --color-brandbg: #eef0f4; /* 激活底/提示条 */
+  --color-accent: #d97a46;  /* 品牌点缀：logo 圆点、少量高亮 */
+  --color-ok: #16a34a;
+  --color-okbg: #e9f7ee;
+  --color-warn: #b45309;
+  --color-warnbg: #fdf3e3;
+  --color-err: #dc2626;
+  --color-errbg: #fdeaea;
+  --color-topbar: #14161c;  /* 顶栏深藏青 */
   --radius-card: 12px;
 }
 
 body {
   @apply bg-paper text-ink antialiased;
-  font-family: "Microsoft YaHei", "PingFang SC", system-ui, sans-serif;
+  font-family: "Segoe UI", "Microsoft YaHei", "PingFang SC", system-ui, sans-serif;
+  font-size: 14px;
 }
+
+/* 细滚动条（工作台观感） */
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-thumb { background: #d3d7de; border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: #b9bec7; }
+::-webkit-scrollbar-track { background: transparent; }

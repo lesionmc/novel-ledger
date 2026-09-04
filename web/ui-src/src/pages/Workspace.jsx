@@ -263,7 +263,7 @@ export default function Workspace({ autoOpen = null }) {
             <div className="flex h-[62vh] items-center justify-center text-sm text-inksoft">← 先选一本书，再选章节或文档</div>
           )}
           {log && (
-            <details className="mt-2 rounded-lg border border-line bg-ink/95 p-2 text-xs text-[#e8e3d8]">
+            <details className="mt-2 rounded-lg border border-line bg-topbar p-2 text-xs text-[#d5d9e0]">
               <summary className="cursor-pointer text-inksoft">引擎日志</summary>
               <pre className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap font-mono">{log}</pre>
             </details>

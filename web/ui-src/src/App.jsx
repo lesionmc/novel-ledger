@@ -2,14 +2,16 @@ import React, { useEffect, useState } from "react";
 import Home from "./pages/Home.jsx";
 import Workspace from "./pages/Workspace.jsx";
 import Usage from "./pages/Usage.jsx";
+import NewWizard from "./pages/NewWizard.jsx";
+import Settings from "./pages/Settings.jsx";
 
 /* novel-ledger · React 工作台（A′ 预构建，逐页迁移中）
-   已迁移：首页工作台 / 章节与账本 / 用量统计。其余入口先跳旧版界面。 */
+   已迁移：首页工作台 / 章节与账本 / 用量统计 / AI 建书向导 / 设置。 */
 
 const NAV = [
-  { title: "创作", items: [{ label: "工作台", view: "home" }, { label: "章节与账本", view: "workspace" }, { label: "新建书", view: null }] },
+  { title: "创作", items: [{ label: "工作台", view: "home" }, { label: "章节与账本", view: "workspace" }, { label: "新建书", view: "newbook" }] },
   { title: "资产", items: [{ label: "用量统计", view: "usage" }, { label: "快照底账", view: null }] },
-  { title: "系统", items: [{ label: "设置", view: null }, { label: "关于", view: null }] },
+  { title: "系统", items: [{ label: "设置", view: "settings" }, { label: "关于", view: null }] },
 ];
 
 export default function App() {
@@ -52,10 +54,12 @@ export default function App() {
           ))}
         </aside>
 
-        <main className="mx-auto w-full max-w-6xl p-6">
+        <main className="mx-auto w-full max-w-6xl flex-1 p-6">
           {view === "home" && <Home go={go} />}
           {view === "workspace" && <Workspace />}
           {view === "usage" && <Usage />}
+          {view === "newbook" && <NewWizard go={go} />}
+          {view === "settings" && <Settings go={go} />}
         </main>
       </div>
     </div>

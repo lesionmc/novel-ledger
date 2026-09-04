@@ -114,6 +114,15 @@ try:
     code, _, body = req("POST", "/api/chat", {})
     check("POST /api/chat 缺 messages → 400 且零外呼", code == 400, f"{code} {body[:80]}")
 
+    # 9. 建书链路（shutil 漏 import 曾让建书 500，2026-09-04 修复）：建临时书→验 ok→清理
+    code, _, body = req("POST", "/api/books", {"name": "测试_断言_建书"})
+    ok_created = code == 200 and json.loads(body).get("ok") is True
+    check("POST /api/books 建书成功（shutil 可用）", ok_created, f"{code} {body[:80]}")
+    if ok_created:
+        import shutil as _sh
+        _sh.rmtree(os.path.join(S.BOOKS_DIR, "测试_断言_建书"), ignore_errors=True)
+        check("测试书已清理", not os.path.isdir(os.path.join(S.BOOKS_DIR, "测试_断言_建书")))
+
 finally:
     srv.shutdown()
 

@@ -34,6 +34,7 @@ API 一览（均返回 JSON）：
 import json
 import os
 import re
+import shutil  # 建书复制 sample_book 必用（漏 import 会让建书/建书向导 500，2026-09-04 修复）
 import subprocess
 import sys
 import urllib.parse

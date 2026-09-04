@@ -6,6 +6,7 @@ import NewWizard from "./pages/NewWizard.jsx";
 import Settings from "./pages/Settings.jsx";
 import Snapshots from "./pages/Snapshots.jsx";
 import Foreshadow from "./pages/Foreshadow.jsx";
+import Assistant from "./pages/Assistant.jsx";
 
 /* novel-ledger · React 工作台（A′ 预构建）
    观感对齐 AI-Novel-Writing-Assistant：深藏青顶栏 + 白侧栏 + 浅灰工作台。 */
@@ -15,6 +16,7 @@ const NAV = [
     { label: "首页", view: "home" },
     { label: "新建书", view: "newbook" },
     { label: "章节与账本", view: "workspace" },
+    { label: "AI 助手", view: "assistant" },
   ] },
   { title: "资产", items: [
     { label: "用量统计", view: "usage" },
@@ -73,6 +75,7 @@ export default function App() {
           {view === "settings" && <Settings go={go} />}
           {view === "snapshots" && <Snapshots />}
           {view === "foreshadow" && <Foreshadow />}
+          {view === "assistant" && <Assistant />}
         </main>
       </div>
     </div>

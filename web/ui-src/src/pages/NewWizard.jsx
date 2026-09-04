@@ -126,6 +126,23 @@ export default function NewWizard({ go }) {
         <span className="flex-1" />
         <button onClick={() => { if (confirm("清空当前对话与三件套，重新开始？")) { sessionStorage.removeItem(SS_KEY); setMsgs([{ role: "system", content: SYS_PROMPT }, { role: "assistant", content: HELLO }]); setBrief(null); setFiles(null); setName(""); setDone(false); setStatus(""); } }}
           className="rounded-lg border border-line bg-panel px-3 py-1.5 text-[13px] hover:border-ink/30">重开一局</button>
+        <input type="file" accept=".txt" className="hidden" id="importTxt"
+          onChange={async (e) => {
+            const f = e.target.files[0]; if (!f) return;
+            const name = (f.name.replace(/\.txt$/i, "") || "导入书").replace(/[\/]/g, "_").slice(0, 40);
+            if (!confirm(`导入《${f.name}》建为新书「${name}」？
+（按"第X章"自动拆章）`)) { e.target.value = ""; return; }
+            setStatus("导入中…（拆章落盘）");
+            try {
+              const text = await f.text();
+              const r = await apiPost(`/api/book/${encodeURIComponent(name)}/import-txt`, { text });
+              setStatus(`导入完成：${r.chapters} 章 ✅ 正在跳转…`);
+              setTimeout(() => go("workspace", r.name || name), 900);
+            } catch (err) { setStatus("导入失败：" + err.message); }
+            e.target.value = "";
+          }} />
+        <button onClick={() => document.getElementById("importTxt").click()}
+          className="rounded-lg border border-line bg-panel px-3 py-1.5 text-[13px] hover:border-ink/30">导入 txt 建书</button>
         <button onClick={genBrief} disabled={streaming} className="rounded-lg border border-line bg-panel px-3 py-1.5 text-[13px] hover:border-ink/30 disabled:opacity-40">提取书名/卖点</button>
         {brief && !files && (
           <button onClick={genFiles} disabled={streaming} className="rounded-lg border border-line bg-panel px-3 py-1.5 text-[13px] hover:border-ink/30 disabled:opacity-40">生成三件套</button>

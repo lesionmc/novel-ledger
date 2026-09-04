@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { api, apiPost, apiPut, usageFromLog, fmt } from "../api.js";
 
 /* 章节与账本页（工作台核心）：书树 | 编辑器/报告 | 动作面板 */
@@ -21,10 +21,17 @@ export default function Workspace({ autoOpen = null }) {
   const [autoBk, setAutoBk] = useState(false);  // R34③：写完本章自动备份全书
   const [lastWrite, setLastWrite] = useState(null); // R31：{no, words, chars} 超限时出加长/精简按钮
   const [fold, setFold] = useState({ ch: false, doc: false, rep: true }); // 树分组折叠
-  const [batch, setBatch] = useState(null);     // 批量写章弹窗：{start, count, words, done, fail}
+  const [batch, setBatch] = useState(null);     // 批量写章弹窗：{start, count, words, running, done, fail}
   const [preview, setPreview] = useState(false); // 编辑器 md 预览模式
+  const [liveLines, setLiveLines] = useState([]); // 写章实时直播日志
+  const liveRef = useRef(null);
 
   useEffect(() => { api("/api/books").then((r) => setBooks(r.books)).catch(() => {}); }, []);
+
+  // 直播日志自动滚底
+  useEffect(() => {
+    if (liveRef.current) liveRef.current.scrollTop = liveRef.current.scrollHeight;
+  }, [liveLines]);
 
   // 建书向导创建新书后跳转过来：自动打开该书（E2E 曾因此按钮全禁用，2026-09-04 修复）
   useEffect(() => {
@@ -80,25 +87,6 @@ export default function Workspace({ autoOpen = null }) {
     finally { setBusy(""); }
   }
 
-  async function runWrite(words) {
-    // R31+R32：写下一章（可选字数；账本目录有 chXXX.章纲.md 时引擎自动遵循）
-    if (busy || !book) return;
-    if (sel && sel.kind === "ch") await save().catch(() => {});
-    setBusy("写下一章"); setLog(""); setMsg("");
-    try {
-      const d = await apiPost(`/api/book/${encodeURIComponent(book)}/write`, { words: words || undefined, auto_backup: autoBk });
-      if (!d.ok) { setMsg("写章失败"); setLog(d.log || "引擎失败"); return; }
-      setLastWrite({ no: d.no, words: d.words || 3000, chars: d.chars });
-      const u = usageFromLog(d.log);
-      const over = d.words && Math.abs(d.chars - d.words) / d.words > 0.30;
-      setMsg(`✅ 第 ${d.no} 章（${fmt(d.chars)} 字${d.words ? ` / 目标 ${fmt(d.words)}` : ""}${d.plan_used ? " · 已按章纲" : ""}）`
-        + (u ? ` · 消耗 ${fmt(u.total)} tokens` : "")
-        + (over ? " · ⚠ 超 ±30%，可用下方按钮校正" : ""));
-      setLog(d.log || "");
-      await openBook(book); setSel({ kind: "ch", no: d.no }); setBody(d.body || ""); setDirty(false);
-    } catch (e) { setMsg("写章失败：" + e.message); }
-    finally { setBusy(""); }
-  }
 
 
 
@@ -147,45 +135,76 @@ export default function Workspace({ autoOpen = null }) {
   async function writeFromPlan() {
     const no = outline.no;
     setOutline(null);
-    await runWriteAt(no);
+    await writeOne(no, null);
   }
 
-  async function runWriteAt(no) {
-    if (busy) return;
-    if (sel && sel.kind === "ch") await save().catch(() => {});
+
+  // 写章实时流（SSE）：逐行接收引擎输出，直播在右栏；返回最终结果
+  async function streamWrite(payload, onLine) {
+    const r = await fetch(`/api/book/${encodeURIComponent(book)}/write-stream`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    if (!r.ok || !r.body) throw new Error("HTTP " + r.status);
+    const reader = r.body.getReader(), dec = new TextDecoder();
+    let buf = "", final = null;
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      const parts = buf.split("\n\n"); buf = parts.pop();
+      for (const blk of parts) {
+        if (!blk.startsWith("data: ")) continue;
+        try {
+          const obj = JSON.parse(blk.slice(6));
+          if (obj.phase === "done") final = obj;
+          else if (onLine) onLine(obj.line || "");
+        } catch (e) {}
+      }
+    }
+    if (!final) throw new Error("写章流意外中断");
+    return final;
+  }
+
+  // 写单章（含直播），完成后刷新书与编辑器
+  async function writeOne(no, words) {
+    setLiveLines([]);
     setBusy("写下一章"); setLog(""); setMsg("");
     try {
-      const d = await apiPost(`/api/book/${encodeURIComponent(book)}/write`, { no, auto_backup: autoBk });
-      if (!d.ok) { setMsg("写章失败"); setLog(d.log || ""); return; }
-      setLastWrite({ no: d.no, words: d.words || 3000, chars: d.chars });
-      setMsg(`✅ 第 ${d.no} 章（${fmt(d.chars)} 字 · 已按章纲）`);
-      setLog(d.log || "");
+      const d = await streamWrite({ no, words, auto_backup: autoBk },
+        (line) => setLiveLines((ls) => [...ls.slice(-200), line]));
+      setBusy(""); setLog(d.log || "");
+      if (d.ok === false || d.error) {
+        setMsg(`第 ${no} 章失败${d.error ? "：" + d.error : ""}`);
+        return { ok: false };
+      }
+      setLastWrite({ no: d.no, words: d.words || words || 3000, chars: d.chars });
+      const u = d.usage ? ` · 消耗 ${fmt(d.usage.total)} tokens` : "";
+      const over = d.words && Math.abs(d.chars - d.words) / d.words > 0.30;
+      setMsg(`✅ 第 ${d.no} 章（${fmt(d.chars)} 字${d.words ? ` / 目标 ${fmt(d.words)}` : ""}${d.plan_used ? " · 已按章纲" : ""}）${u}` + (over ? " · ⚠ 超 ±30%，可校正" : ""));
       await openBook(book); setSel({ kind: "ch", no: d.no }); setBody(d.body || ""); setDirty(false);
-    } catch (e) { setMsg("写章失败：" + e.message); }
-    finally { setBusy(""); }
+      return { ok: true, d };
+    } catch (e) {
+      setBusy(""); setMsg("写章失败：" + e.message);
+      return { ok: false };
+    }
   }
 
-  // 批量连写：从 start 起连写 count 章，每章 words 字（前端串行调 /write，逐章刷新）
+  // 批量连写：从 start 起连写 count 章，每章 words 字（逐章走实时流）
   async function runBatch(start, count, words) {
     setBatch((b) => ({ ...b, running: true, done: 0, fail: 0, current: start }));
     let fail = 0;
     for (let i = 0; i < count; i++) {
-      const no = start + i;
-      try {
-        const d = await apiPost(`/api/book/${encodeURIComponent(book)}/write`, { no, words, auto_backup: autoBk });
-        if (!d.ok) { fail += 1; setLog(d.log || "引擎失败"); }
-        else {
-          setLastWrite({ no: d.no, words: d.words || words, chars: d.chars });
-          setLog(d.log || "");
-          setBody(d.body || ""); setSel({ kind: "ch", no: d.no }); setDirty(false);
-        }
-      } catch (e) { fail += 1; setMsg("第 " + no + " 章失败：" + e.message); }
-      setBatch((b) => ({ ...b, done: i + 1, fail, current: no + 1 }));
+      setBatch((b) => ({ ...b, current: start + i, done: i }));
+      const r = await writeOne(start + i, words);
+      if (!r.ok) fail += 1;
+      setBatch((b) => ({ ...b, done: i + 1, fail }));
     }
-    await openBook(book);
-    setMsg(`批量写章结束：完成 ${count - fail}/${count} 章` + (fail ? `（${fail} 章失败，详见引擎日志）` : " ✅"));
+    setBusy("");
+    setMsg(`批量写章结束：完成 ${count - fail}/${count} 章` + (fail ? `（${fail} 章失败，详见直播日志）` : " ✅"));
     setTimeout(() => setBatch(null), 900);
   }
+
 
   async function renameBook() {
     const nn = prompt(`把《${book}》重命名为：`, book);
@@ -353,11 +372,19 @@ export default function Workspace({ autoOpen = null }) {
               );
             })}
           </div>
-          {busy && (
-            <div className="mt-3 rounded-lg bg-warnbg px-3 py-2 text-xs text-warn">
-              ⏳ {busy}中…（写章约 1-3 分钟，请勿关闭）
-            </div>
-          )}
+  {busy && (
+    <div className="mt-3 rounded-lg bg-warnbg px-3 py-2 text-xs text-warn">
+      ⏳ {busy}中…（每章约 1-3 分钟：写正文 + 更新账本）
+    </div>
+  )}
+  {busy && liveLines.length > 0 && (
+    <div ref={liveRef} className="mt-2 h-48 overflow-auto rounded-lg bg-topbar p-2 font-mono text-[11px] leading-5 text-[#c7cdd8]">
+      {liveLines.map((l, i) => (
+        <div key={i} className={l.includes("⚠") ? "text-warn" : l.includes("用量") ? "text-ok" : ""}>{l}</div>
+      ))}
+      <span className="inline-block h-3 w-1.5 animate-pulse bg-accent" />
+    </div>
+  )}
           <label className="mt-3 flex items-start gap-2 text-xs text-inksoft">
             <input type="checkbox" checked={autoBk} onChange={(e) => setAutoBk(e.target.checked)} className="mt-0.5" />
             写完本章自动备份全书 zip

@@ -416,6 +416,7 @@ class Handler(BaseHTTPRequestHandler):
         if segs and segs[0] == "book" and len(segs) >= 2:
             name = segs[1]
             p = book_path(name)
+
             if not p:
                 api_error(self, 404, "书不存在: " + name)
                 return
@@ -582,9 +583,107 @@ class Handler(BaseHTTPRequestHandler):
         if segs and segs[0] == "book" and len(segs) == 3:
             name = segs[1]
             p = book_path(name)
+            # 导入 txt 建书（按「第X章」自动拆章；导出 txt 的逆操作）
+            if len(segs) == 3 and segs[2] == "import-txt":
+                if re.search(r"[\\/]", name) or name in (".", "..") or name.startswith("_"):
+                    api_error(self, 400, "书名不合法")
+                    return
+                fp = os.path.join(BOOKS_DIR, name)
+                if os.path.exists(fp):
+                    api_error(self, 400, "已存在同名书: " + name)
+                    return
+                data = self._read_json()
+                text = (data.get("text") or "").replace("\r\n", "\n").strip()
+                if len(text) < 50:
+                    api_error(self, 400, "文本太短，无法导入")
+                    return
+                pat = re.compile(r"^\s*(第[0-9一二三四五六七八九十百千零两]+章[^\n]*)$", re.M)
+                marks = [(m.start(), m.group(1).strip()) for m in pat.finditer(text)]
+                chs = []
+                if marks:
+                    for i, (pos, t) in enumerate(marks):
+                        end = marks[i + 1][0] if i + 1 < len(marks) else len(text)
+                        body_i = text[pos:end].strip()
+                        body_i = body_i.split("\n", 1)[1].strip() if "\n" in body_i else ""
+                        chs.append((t, body_i))
+                else:
+                    chs = [("第一章", text)]
+                chs = chs[:500]
+                os.makedirs(os.path.join(fp, "chapters"), exist_ok=True)
+                for i, (t, body_i) in enumerate(chs, 1):
+                    write_text(os.path.join(fp, "chapters", f"ch{i:03d}.md"), f"# {t}\n\n{body_i}\n")
+                write_text(os.path.join(fp, "设定.md"), "# 设定\n\n（导入书——请让 AI 助手根据正文补全设定/角色卡/大纲）\n")
+                write_text(os.path.join(fp, "角色卡.md"), "# 角色卡\n\n（导入书，待补）\n")
+                write_text(os.path.join(fp, "大纲.md"), "# 大纲\n\n（导入书，待补）\n")
+                api_ok(self, {"ok": True, "name": name, "chapters": len(chs)})
+                return
             if not p:
                 api_error(self, 404, "书不存在: " + name)
                 return
+
+            if not p:
+                api_error(self, 404, "书不存在: " + name)
+                return
+
+            # 写章实时直播（SSE）：逐行推送引擎输出，前端看得见每一步在干嘛
+            if len(segs) == 3 and segs[2] == "write-stream":
+                data = self._read_json()
+                no = int(data.get("no") or 0) or next_chapter_no(p)
+                words = data.get("words")
+                try:
+                    words = max(1000, min(10000, int(words))) if words else None
+                except (TypeError, ValueError):
+                    words = None
+                self.send_response(200)
+                self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+                self.send_header("Cache-Control", "no-cache")
+                self.end_headers()
+
+                def emit(obj):
+                    self.wfile.write(("data: " + json.dumps(obj, ensure_ascii=False) + "\n\n").encode("utf-8"))
+                    self.wfile.flush()
+
+                try:
+                    if not os.path.exists(os.path.join(p, "story_state.md")):
+                        emit({"phase": "run", "line": "【准备】账本不存在，先初始化账本（调用模型，约 1 分钟）…"})
+                        ok0, o0, e0 = run_engine([WRITE_CH, "--book", p, "--init-state"])
+                        for ln in (o0 + e0).splitlines():
+                            if ln.strip():
+                                emit({"phase": "run", "line": ln})
+                    args = [WRITE_CH, "--book", p, "--chapter", str(no)]
+                    if words:
+                        args += ["--words", str(words)]
+                    if data.get("auto_backup"):
+                        args += ["--auto-backup"]
+                    emit({"phase": "run", "line": f"【启动】开始写第 {no} 章（目标 {words or 3000} 字）…"})
+                    proc = subprocess.Popen([sys.executable] + args, stdout=subprocess.PIPE,
+                                            stderr=subprocess.STDOUT, text=True, encoding="utf-8",
+                                            errors="replace", cwd=ROOT)
+                    buf = []
+                    for line in proc.stdout:
+                        line = line.rstrip()
+                        if not line:
+                            continue
+                        buf.append(line)
+                        emit({"phase": "run", "line": line})
+                    proc.wait(timeout=1200)
+                    ok = proc.returncode == 0
+                    log = "\n".join(buf)
+                    body = read_text(os.path.join(p, "chapters", f"ch{no:03d}.md"))
+                    plan_file = os.path.join(p, "chapters", f"ch{no:03d}.章纲.md")
+                    usage = parse_usage("", log)
+                    emit({"phase": "done", "ok": ok, "no": no, "chars": len(body or ""),
+                          "body": body or "", "log": log[-4000:], "words": words,
+                          "plan_used": os.path.exists(plan_file), "usage": usage})
+                except BrokenPipeError:
+                    raise  # 前端断开（如用户关页）；引擎子进程自行跑完
+                except Exception as e:
+                    try:
+                        emit({"phase": "done", "ok": False, "error": f"{type(e).__name__}: {e}"})
+                    except Exception:
+                        pass
+                return
+
             action = segs[2]
             data = self._read_json()
 

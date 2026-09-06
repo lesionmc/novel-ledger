@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from "react";
+﻿import React, { useEffect, useRef, useState } from "react";
 import { api, apiPost, apiPutJson } from "../api.js";
 import Foreshadow from "./Foreshadow.jsx";
 
@@ -28,7 +28,6 @@ export default function StoryAssets({ go }) {
   const [dirty, setDirty] = useState(false);
   const [busy, setBusy] = useState("");
   const [msg, setMsg] = useState("");
-  const [extra, setExtra] = useState("");
   const abortRef = useRef(null);
 
   useEffect(() => { api("/api/books").then((r) => setBooks(r.books)).catch(() => {}); }, []);
@@ -68,7 +67,7 @@ export default function StoryAssets({ go }) {
           stream: false, temperature: 0.6, max_tokens: 8000,
           messages: [
             { role: "system", content: `你是${t.aiRole}，只输出文档本身，不要前言后语。贴合已有设定，不得自相矛盾。` },
-            { role: "user", content: `书：《${book}》\n\n${ctx.join("\n\n") || "（全新书，无已有资料）"}\n\n【任务】\n${t.aiTask}\n${extra.trim() ? "【补充要求】\n" + extra.trim() : ""}` },
+            { role: "user", content: `书：《${book}》\n\n${ctx.join("\n\n") || "（全新书，无已有资料）"}\n\n【任务】\n${t.aiTask}` },
           ],
         }),
         signal: ctl.signal,
@@ -151,15 +150,10 @@ export default function StoryAssets({ go }) {
                 </button>
               </>
             )}
-            <button onClick={aiDraft} disabled={busy || !editing && body && !confirm("AI 起草会替换当前内容（建议先进入修改模式确认现状）。继续？")}
+            <button onClick={aiDraft} disabled={busy}
               className="rounded-lg border border-line bg-panel px-3.5 py-1.5 text-[13px] font-semibold text-ink hover:border-brand2 hover:text-brand disabled:opacity-40">
               {busy === "AI 起草" ? "⏳ 起草中…" : "✨ AI 起草"}
             </button>
-            {editing && (
-              <input value={extra} onChange={(e) => setExtra(e.target.value)}
-                placeholder="补充要求（可选）：例如「主角是法医」「力量体系要有代价」"
-                className="min-w-[240px] flex-1 rounded-lg border border-line bg-panel px-3 py-1.5 text-[13px] text-ink" />
-            )}
             <span className="flex-1" />
             {!editing && !dirty && <span className="text-xs text-inksoft/70">只读模式 · 点「修改」编辑</span>}
           </div>

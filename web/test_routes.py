@@ -456,6 +456,26 @@ try:
     code, _, resp = req("POST", "/api/plugins/no_such_plugin/toggle", {"enabled": False})
     check("toggle 坏插件名 → 404", code == 404, f"{code} {resp[:60]}")
 
+    # 12.7 书本管理：archive（删除=移入 _archive，不真删）——建临时书→归档→书架消失→残留清理
+    import shutil as _sh3
+    _tname = "测试_断言_归档"
+    _sh3.rmtree(os.path.join(S.BOOKS_DIR, _tname), ignore_errors=True)
+    code, _, resp = req("POST", "/api/books", {"name": _tname})
+    check("归档前置：建临时书成功", code == 200 and json.loads(resp).get("ok") is True, f"{code} {resp[:60]}")
+    code, _, resp = req("POST", f"/api/book/{_tname}/archive", {})
+    d = json.loads(resp) if code == 200 else {}
+    check("POST /archive 归档成功且指向 _archive",
+          code == 200 and d.get("ok") is True and "_archive" in (d.get("archived_to") or ""), f"{code} {resp[:80]}")
+    code, _, resp = req("GET", "/api/books")
+    check("归档后书架不再列出该书", _tname not in resp, "")
+    check("归档目录真实存在（可手工找回）",
+          any(p.startswith(_tname + "-") for p in os.listdir(os.path.join(S.BOOKS_DIR, "_archive"))), "")
+    for p in os.listdir(os.path.join(S.BOOKS_DIR, "_archive")):
+        if p.startswith(_tname + "-"):
+            _sh3.rmtree(os.path.join(S.BOOKS_DIR, "_archive", p), ignore_errors=True)
+    code, _, resp = req("POST", "/api/book/no_such_book_abc/archive", {})
+    check("POST /archive 不存在书 → 404", code == 404, f"{code} {resp[:60]}")
+
 finally:
     srv.shutdown()
 

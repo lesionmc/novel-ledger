@@ -311,3 +311,17 @@ def put_book_rename(h, params):
         return
     os.rename(p, os.path.join(BOOKS_DIR, new))
     api_ok(h, {"ok": True, "name": new})
+
+
+@route("POST", "book/{book}/archive")
+def post_book_archive(h, params):
+    # 「删除」书 = 移入 books/_archive/<名>-<时间戳>（不真删：防误删书稿，可手工移回）
+    p = _require_book(h, params)
+    if p is None:
+        return
+    archive_dir = os.path.join(BOOKS_DIR, "_archive")
+    os.makedirs(archive_dir, exist_ok=True)
+    name = os.path.basename(p.rstrip("/\\"))
+    dest = os.path.join(archive_dir, f"{name}-{time.strftime('%Y%m%d-%H%M%S')}")
+    os.rename(p, dest)
+    api_ok(h, {"ok": True, "name": name, "archived_to": os.path.relpath(dest, BOOKS_DIR)})

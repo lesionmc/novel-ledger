@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { api, fmt } from "../api.js";
+import { api, apiPost, apiPutJson, fmt } from "../api.js";
 import { useTasks } from "../tasksStore.js";
 
 /* 首页工作台：继续的故事 + 指标（观感对齐竞品的统计卡 + 状态点） */
@@ -14,6 +14,39 @@ export default function Home({ go }) {
   const [err, setErr] = useState("");
   const { tasks } = useTasks();
   const cur = (tasks || []).find((t) => ["running", "paused", "failed"].includes(norm(t.status)));
+  const [menuFor, setMenuFor] = useState(null); // 打开管理菜单的书名
+
+  function reload() {
+    (async () => {
+      try {
+        const bl = (await api("/api/books")).books;
+        setBooks(bl);
+        const ds = {};
+        await Promise.all(bl.map(async (b) => { try { ds[b] = await api(`/api/book/${encodeURIComponent(b)}`); } catch (e) {} }));
+        setDetails(ds);
+      } catch (e) {}
+    })();
+  }
+
+  async function renameBook(b) {
+    setMenuFor(null);
+    const nn = prompt(`把《${b}》重命名为：`, b);
+    if (!nn || nn.trim() === b) return;
+    try {
+      await apiPutJson(`/api/book/${encodeURIComponent(b)}/rename`, { new: nn.trim() });
+      reload();
+    } catch (e) { alert("重命名失败：" + e.message); }
+  }
+
+  async function archiveBook(b) {
+    setMenuFor(null);
+    if (!confirm(`把《${b}》移入存档（书架不再显示）？\n书稿不会真删除——可在 books/_archive/ 里找回。`)) return;
+    try {
+      const d = await apiPost(`/api/book/${encodeURIComponent(b)}/archive`, {});
+      alert(`已存档 → ${d.archived_to}`);
+      reload();
+    } catch (e) { alert("存档失败：" + e.message); }
+  }
 
   useEffect(() => {
     (async () => {
@@ -23,7 +56,7 @@ export default function Home({ go }) {
         const bl = (await api("/api/books")).books;
         setBooks(bl);
         const ds = {};
-        for (const b of bl) { try { ds[b] = await api(`/api/book/${encodeURIComponent(b)}`); } catch (e) {} }
+        await Promise.all(bl.map(async (b) => { try { ds[b] = await api(`/api/book/${encodeURIComponent(b)}`); } catch (e) {} }));
         setDetails(ds);
         try { setUsage((await api("/api/usage")).summary); } catch (e) {}
       } catch (e) { setErr(e.message); }
@@ -44,7 +77,7 @@ export default function Home({ go }) {
           <h1 className="text-xl font-bold text-ink">继续的故事</h1>
           <p className="mt-0.5 text-[13px] text-inksoft">从上次停下的地方接着写——AI 是笔，你是作者。</p>
         </div>
-        <button onClick={() => go("newbook")}
+        <button onClick={() => { try { sessionStorage.setItem("nl_assistant_open_create", "1"); } catch (e) {} go("assistant"); }}
           className="rounded-lg bg-brand px-3.5 py-2 text-[13px] font-medium text-white transition hover:bg-brand2">
           ＋ 新建书
         </button>
@@ -78,6 +111,19 @@ export default function Home({ go }) {
               </div>
               <span className="flex-1" />
               <span className="rounded-lg bg-brand px-3.5 py-1.5 text-[13px] font-medium text-white transition hover:bg-brand2">继续创作 →</span>
+              <div className="relative" onClick={(e) => e.stopPropagation()}>
+                <button onClick={() => setMenuFor(menuFor === b ? null : b)}
+                  title="重命名 / 存档"
+                  className="rounded-lg border border-line px-2 py-1.5 text-[13px] leading-none text-inksoft transition hover:border-brand2 hover:text-brand">⋯</button>
+                {menuFor === b && (
+                  <div className="absolute right-0 top-9 z-30 w-36 rounded-xl border border-line bg-panel p-1.5 shadow-lg">
+                    <button onClick={() => renameBook(b)}
+                      className="block w-full rounded-lg px-3 py-2 text-left text-[13px] text-ink hover:bg-paper">✏️ 重命名</button>
+                    <button onClick={() => archiveBook(b)}
+                      className="block w-full rounded-lg px-3 py-2 text-left text-[13px] text-err hover:bg-errbg">🗑 存档（删除）</button>
+                  </div>
+                )}
+              </div>
             </div>
           );
         })}

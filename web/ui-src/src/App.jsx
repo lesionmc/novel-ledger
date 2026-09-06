@@ -2,7 +2,6 @@ import React, { useEffect, useState } from "react";
 import Home from "./pages/Home.jsx";
 import Workspace from "./pages/Workspace.jsx";
 import Usage from "./pages/Usage.jsx";
-import NewWizard from "./pages/NewWizard.jsx";
 import Settings from "./pages/Settings.jsx";
 import Snapshots from "./pages/Snapshots.jsx";
 import Foreshadow from "./pages/Foreshadow.jsx";
@@ -12,7 +11,6 @@ import Tasks from "./pages/Tasks.jsx";
 import Plugins from "./pages/Plugins.jsx";
 import Rules from "./pages/Rules.jsx";
 import Templates from "./pages/Templates.jsx";
-import BookRail from "./components/BookRail.jsx";
 import {
   useTheme, setTheme, getTheme,
   useCollapsed, setCollapsed,
@@ -26,9 +24,8 @@ import { useTasks, startTaskPolling } from "./tasksStore.js";
 const NAV = [
   { title: "创作", items: [
     { label: "首页", view: "home" },
-    { label: "新建书", view: "newbook" },
-    { label: "章节与账本", view: "workspace" },
     { label: "AI 助手", view: "assistant" },
+    { label: "章节与账本", view: "workspace" },
     { label: "任务中心", view: "tasks" },
   ] },
   { title: "资产", items: [
@@ -52,7 +49,6 @@ const THEME_NAME = { "": "冷色", paper: "暖纸", dark: "暗色" };
 export default function App() {
   const [view, setView] = useState("home");
   const [autoBook, setAutoBook] = useState(null);
-  const [navMode, setNavMode] = useState("create"); // workspace 视图下的侧栏模式：create=书内 Rail / project=全局导航
   const [bellOpen, setBellOpen] = useState(false);
 
   const theme = useTheme();
@@ -65,7 +61,6 @@ export default function App() {
     setView(v);
     setAutoBook(book || null);
     setBellOpen(false);
-    if (v === "workspace") setNavMode("create");
   };
 
   // 主题应用到 <html data-theme>
@@ -92,16 +87,6 @@ export default function App() {
         <span className="text-xs text-topbarfg/80">AI 小说创作台</span>
 
         <span className="flex-1" />
-
-        {/* 进入「章节与账本」时：项目导航 / 创作导航 互斥切换 */}
-        {view === "workspace" && (
-          <div className="flex items-center rounded-lg bg-topbarfg/10 p-0.5 text-[12px]">
-            <button onClick={() => setNavMode("project")}
-              className={`rounded-md px-2.5 py-1 transition ${navMode === "project" ? "bg-topbarfg/20 font-semibold" : "hover:bg-topbarfg/10"}`}>项目导航</button>
-            <button onClick={() => setNavMode("create")}
-              className={`rounded-md px-2.5 py-1 transition ${navMode === "create" ? "bg-topbarfg/20 font-semibold" : "hover:bg-topbarfg/10"}`}>创作导航</button>
-          </div>
-        )}
 
         {/* 三档主题切换 */}
         <button onClick={cycleTheme} title={`主题：${THEME_NAME[getTheme()]}`}
@@ -157,13 +142,8 @@ export default function App() {
       </header>
 
       <div className="flex flex-1">
-        {/* 侧栏：workspace+创作导航 → BookRail；否则全局导航。可折叠 w-44 ↔ w-14 */}
-        {view === "workspace" && navMode === "create" ? (
-          <aside className={`${collapsed ? "w-14" : "w-44"} shrink-0 border-r border-line bg-panel transition-all`}>
-            <BookRail go={go} collapsed={collapsed} />
-          </aside>
-        ) : (
-          <aside className={`${collapsed ? "w-14" : "w-44"} shrink-0 border-r border-line bg-panel px-2.5 py-3 transition-all`}>
+        {/* 侧栏：恒显全局导航（工作台内也直接可点，无需右上角切换）。可折叠 w-44 ↔ w-14 */}
+        <aside className={`${collapsed ? "w-14" : "w-44"} shrink-0 border-r border-line bg-panel px-2.5 py-3 transition-all`}>
             {NAV.map((g) => (
               <div key={g.title} className="mb-4">
                 {!collapsed && (
@@ -183,7 +163,6 @@ export default function App() {
               </div>
             ))}
           </aside>
-        )}
 
         {/* 折叠手柄（侧栏底部） */}
         <div className="relative">
@@ -198,7 +177,6 @@ export default function App() {
           {view === "home" && <Home go={go} />}
           {view === "workspace" && <Workspace autoOpen={autoBook} />}
           {view === "usage" && <Usage />}
-          {view === "newbook" && <NewWizard go={go} />}
           {view === "settings" && <Settings go={go} />}
           {view === "snapshots" && <Snapshots />}
           {view === "foreshadow" && <Foreshadow />}

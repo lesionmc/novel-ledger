@@ -76,6 +76,31 @@ def put_settings(h, params):
     api_ok(h, {"ok": True, "settings": srv.public_settings(), "key_set": srv.KEY_SET})
 
 
+@route("POST", "settings/models")
+def post_settings_models(h, params):
+    """配置向导第 2 步：拉 OpenAI 兼容 /models 列表（body {base_url, key}）。
+    仅用户在设置页主动配置时外呼；key 只在本请求内使用，不落盘不回显。"""
+    import json as _json
+    import urllib.request
+    data = h._read_json()
+    base = (data.get("base_url") or "").strip().rstrip("/")
+    key = (data.get("key") or "").strip()
+    if not base:
+        api_error(h, 400, "需要 base_url")
+        return
+    req = urllib.request.Request(base + "/models",
+                                 headers={"Authorization": "Bearer " + key})
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            payload = _json.loads(resp.read().decode("utf-8"))
+    except Exception as e:
+        api_error(h, 502, f"拉取模型列表失败：{e}")
+        return
+    ids = sorted({(m or {}).get("id") or (m or {}).get("model") or ""
+                  for m in (payload.get("data") or [])} - {""})
+    api_ok(h, {"models": ids})
+
+
 @route("POST", "settings/test")
 def post_settings_test(h, params):
     srv = _server()

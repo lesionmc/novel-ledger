@@ -23,24 +23,32 @@ import { useTasks, startTaskPolling } from "./tasksStore.js";
 
 const NAV = [
   { title: "创作", items: [
-    { label: "首页", view: "home" },
-    { label: "AI 助手", view: "assistant" },
-    { label: "章节与账本", view: "workspace" },
-    { label: "任务中心", view: "tasks" },
+    { label: "首页", view: "home", icon: "🏠" },
+    { label: "AI 助手", view: "assistant", icon: "💬" },
+    { label: "章节与账本", view: "workspace", icon: "📚" },
+    { label: "任务中心", view: "tasks", icon: "🎯" },
   ] },
   { title: "资产", items: [
-    { label: "模板库", view: "templates" },
-    { label: "用量统计", view: "usage" },
-    { label: "快照底账", view: "snapshots" },
-    { label: "伏笔账本", view: "foreshadow" },
-    { label: "图谱与文风", view: "graph" },
+    { label: "模板库", view: "templates", icon: "🗂" },
+    { label: "用量统计", view: "usage", icon: "📊" },
+    { label: "快照底账", view: "snapshots", icon: "🗄" },
+    { label: "伏笔账本", view: "foreshadow", icon: "🔗" },
+    { label: "图谱与文风", view: "graph", icon: "🕸" },
   ] },
   { title: "系统", items: [
-    { label: "技能中心", view: "plugins" },
-    { label: "提示词管理", view: "rules" },
-    { label: "设置", view: "settings" },
+    { label: "技能中心", view: "plugins", icon: "🧩" },
+    { label: "提示词管理", view: "rules", icon: "📝" },
+    { label: "设置", view: "settings", icon: "⚙" },
   ] },
 ];
+
+const VERSION = "v0.9.3";
+const GITHUB_URL = "https://github.com/lesionmc/novel-ledger";
+const GITHUB_SVG = (
+  <svg viewBox="0 0 16 16" width="15" height="15" fill="currentColor" aria-hidden="true">
+    <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z" />
+  </svg>
+);
 
 const THEME_CYCLE = ["", "paper", "dark"]; // "" = 冷色（默认）
 const THEME_ICON = { "": "❄", paper: "📄", dark: "🌙" };
@@ -80,11 +88,21 @@ export default function App() {
 
   return (
     <div className="flex min-h-screen flex-col">
-      {/* 顶栏：渐变底 + 细边 */}
-      <header className="topbar-grad sticky top-0 z-30 flex h-11 items-center gap-2.5 px-4 text-topbarfg">
-        <span className="h-2 w-2 rounded-full bg-accent" />
-        <span className="text-[14px] font-bold tracking-wide">novel-ledger</span>
-        <span className="text-xs text-topbarfg/80">AI 小说创作台</span>
+      {/* 顶栏：渐变底 + 细边。左上角 = logo 块 + 双行标题 + 版本徽章 + GitHub 链接 */}
+      <header className="topbar-grad sticky top-0 z-30 flex h-14 items-center gap-3 px-4 text-topbarfg">
+        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-topbarfg/15 text-[17px] shadow-sm">📖</span>
+        <div className="leading-tight">
+          <div className="flex items-center gap-1.5">
+            <span className="text-[15px] font-extrabold tracking-wide">AI 小说创作工作台</span>
+            <span className="rounded-md bg-topbarfg/15 px-1.5 py-0.5 text-[10px] font-bold">{VERSION}</span>
+          </div>
+          <div className="text-[10.5px] text-topbarfg/70">AI Novel Production Engine · novel-ledger</div>
+        </div>
+        <a href={GITHUB_URL} target="_blank" rel="noreferrer" title="打开 GitHub 仓库"
+          className="flex items-center gap-1.5 rounded-lg bg-topbarfg/10 px-2 py-1.5 text-[12px] font-semibold transition hover:bg-topbarfg/20">
+          {GITHUB_SVG}
+          <span className="hidden sm:inline">GitHub</span>
+        </a>
 
         <span className="flex-1" />
 
@@ -143,32 +161,33 @@ export default function App() {
 
       <div className="flex flex-1">
         {/* 侧栏：恒显全局导航（工作台内也直接可点，无需右上角切换）。可折叠 w-44 ↔ w-14 */}
-        <aside className={`${collapsed ? "w-14" : "w-44"} shrink-0 border-r border-line bg-panel px-2.5 py-3 transition-all`}>
+        <aside className={`${collapsed ? "w-14" : "w-48"} shrink-0 border-r border-line bg-panel px-2.5 py-3 transition-all`}>
             {NAV.map((g) => (
               <div key={g.title} className="mb-4">
                 {!collapsed && (
-                  <div className="px-2.5 pb-1 text-[11px] font-medium uppercase tracking-widest text-inksoft/70">{g.title}</div>
+                  <div className="px-2.5 pb-1 text-[11px] font-bold uppercase tracking-widest text-inksoft/80">{g.title}</div>
                 )}
                 {g.items.map((it) => (
                   <div key={it.label} onClick={() => go(it.view)}
                     title={it.label}
-                    className={`relative mb-0.5 cursor-pointer rounded-lg py-2 pl-3.5 pr-2 text-[13px] transition ${
+                    className={`relative mb-0.5 flex cursor-pointer items-center gap-2 rounded-lg py-2 pl-3 pr-2 text-[13.5px] font-semibold transition ${
                       it.view === view
-                        ? "bg-brandbg font-semibold text-ink"
+                        ? "bg-brandbg font-bold text-ink"
                         : "text-inksoft hover:bg-paper hover:text-ink"}`}>
                     {it.view === view && <span className="absolute left-0 top-1/2 h-4 w-[3px] -translate-y-1/2 rounded-full bg-accent" />}
-                    {collapsed ? it.label.slice(0, 1) : it.label}
+                    <span className="w-5 shrink-0 text-center text-[14px]">{it.icon}</span>
+                    {!collapsed && <span className="truncate">{it.label}</span>}
                   </div>
                 ))}
               </div>
             ))}
           </aside>
 
-        {/* 折叠手柄（侧栏底部） */}
+        {/* 折叠手柄（侧栏中部，常显可回收） */}
         <div className="relative">
           <button onClick={() => setCollapsed(!collapsed)}
-            className="absolute -left-3 top-1/2 z-20 hidden h-7 w-3 -translate-y-1/2 items-center justify-center rounded-l border border-line bg-panel text-[10px] text-inksoft hover:text-ink lg:flex"
-            title={collapsed ? "展开侧栏" : "折叠侧栏"}>
+            className="absolute -left-3 top-1/2 z-20 flex h-7 w-3 -translate-y-1/2 items-center justify-center rounded-l border border-line bg-panel text-[10px] text-inksoft hover:text-ink"
+            title={collapsed ? "展开侧栏" : "收起侧栏"}>
             {collapsed ? "›" : "‹"}
           </button>
         </div>

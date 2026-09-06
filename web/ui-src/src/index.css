@@ -33,31 +33,31 @@
   --shadow-lg: var(--nl-shadow-lg);
 }
 
-/* 冷色（默认观感，对齐 AI-Novel-Writing-Assistant：深藏青主色 + 冷灰中性 + 白卡片浅灰底） */
+/* 冷色（默认：现代 AI 工作台观感 —— 蓝色主品牌 + 冷灰中性 + 白卡片浅灰底） */
 :root {
-  --nl-paper: #f5f6f8;
+  --nl-paper: #f4f6fa;
   --nl-panel: #ffffff;
-  --nl-line: #e5e7eb;
-  --nl-ink: #171923;
-  --nl-inksoft: #70757f;
-  --nl-brand: #171923;
-  --nl-brand2: #2b303c;
-  --nl-brandbg: #eef0f4;
-  --nl-accent: #d97a46;
+  --nl-line: #e3e8ef;
+  --nl-ink: #101828;
+  --nl-inksoft: #667085;
+  --nl-brand: #2563eb;
+  --nl-brand2: #3b82f6;
+  --nl-brandbg: #eaf0fe;
+  --nl-accent: #ea8a3f;
   --nl-ok: #16a34a;
   --nl-okbg: #e9f7ee;
   --nl-warn: #b45309;
   --nl-warnbg: #fdf3e3;
   --nl-err: #dc2626;
   --nl-errbg: #fdeaea;
-  --nl-topbar: #14161c;
-  --nl-topbarfg: #d5d9e0;
+  --nl-topbar: #0e1726;
+  --nl-topbarfg: #d9e2f2;
   --nl-success: #16a34a;
   --nl-warning: #b45309;
   --nl-info: #2563eb;
-  --nl-shadow-sm: 0 1px 2px rgba(20, 22, 28, 0.06);
-  --nl-shadow-md: 0 6px 16px rgba(20, 22, 28, 0.10);
-  --nl-shadow-lg: 0 16px 40px rgba(20, 22, 28, 0.16);
+  --nl-shadow-sm: 0 1px 2px rgba(16, 24, 40, 0.06);
+  --nl-shadow-md: 0 6px 16px rgba(16, 24, 40, 0.10);
+  --nl-shadow-lg: 0 16px 40px rgba(16, 24, 40, 0.16);
 }
 
 /* 暖纸（paper）：米黄纸感 + 暖棕主色 */
@@ -87,25 +87,25 @@
   --nl-shadow-lg: 0 16px 40px rgba(90, 64, 28, 0.18);
 }
 
-/* 暗色（dark）：近黑底 + 浅字 + 蓝调主色（保证白字按钮可读） */
+/* 暗色（dark）：GitHub-dark 系深蓝黑 + 高亮蓝品牌（AI 工具主流观感） */
 [data-theme="dark"] {
-  --nl-paper: #0f1115;
-  --nl-panel: #171a21;
-  --nl-line: #2a2f3a;
-  --nl-ink: #e6e8ee;
-  --nl-inksoft: #9aa3b2;
-  --nl-brand: #5b82c7;
-  --nl-brand2: #7aa0d8;
-  --nl-brandbg: #232a38;
-  --nl-accent: #e0915a;
+  --nl-paper: #0b0f16;
+  --nl-panel: #11161f;
+  --nl-line: #232b38;
+  --nl-ink: #e8ecf3;
+  --nl-inksoft: #98a4b5;
+  --nl-brand: #4d80f0;
+  --nl-brand2: #6f9bff;
+  --nl-brandbg: #182234;
+  --nl-accent: #f0a35c;
   --nl-ok: #4ade80;
-  --nl-okbg: #16331f;
+  --nl-okbg: #12291c;
   --nl-warn: #f0b35a;
   --nl-warnbg: #332a17;
   --nl-err: #f87171;
   --nl-errbg: #351c1c;
-  --nl-topbar: #0b0d11;
-  --nl-topbarfg: #c7cdd8;
+  --nl-topbar: #070a10;
+  --nl-topbarfg: #c3cbd9;
   --nl-success: #4ade80;
   --nl-warning: #f0b35a;
   --nl-info: #60a5fa;
@@ -116,10 +116,13 @@
 
 body {
   @apply bg-paper text-ink antialiased;
-  font-family: "Segoe UI", "Microsoft YaHei", "PingFang SC", system-ui, sans-serif;
+  font-family: "HarmonyOS Sans SC", "MiSans", "Segoe UI", "Microsoft YaHei", "PingFang SC", system-ui, sans-serif;
   font-size: 14px;
+  font-weight: 500; /* 全局字重抬半档（用户要求字体加粗一点） */
   transition: background-color 200ms ease, color 200ms ease;
 }
+
+h1, h2, h3, h4 { font-weight: 800; letter-spacing: 0.01em; }
 
 /* 细滚动条（工作台观感，随主题） */
 ::-webkit-scrollbar { width: 8px; height: 8px; }

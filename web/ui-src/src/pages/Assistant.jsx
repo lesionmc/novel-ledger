@@ -244,7 +244,7 @@ export default function Assistant({ go }) {
   const lastAssistant = [...msgs].reverse().find((m) => m.role === "assistant" && m.content);
 
   return (
-    <div className="flex h-[calc(100vh-2.75rem-1.5rem)] gap-3">
+    <div className="flex h-[calc(100vh-3.5rem-1.5rem)] gap-3">
       {/* ── 会话列表（WorkBuddy 风格侧栏） ── */}
       <aside className="flex w-56 shrink-0 flex-col rounded-xl border border-line bg-panel shadow-sm">
         <button onClick={newChat}

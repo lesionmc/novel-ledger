@@ -7,6 +7,9 @@ import Snapshots from "./pages/Snapshots.jsx";
 import Foreshadow from "./pages/Foreshadow.jsx";
 import Graph from "./pages/Graph.jsx";
 import Assistant from "./pages/Assistant.jsx";
+import Guide from "./pages/Guide.jsx";
+import StoryAssets from "./pages/StoryAssets.jsx";
+import Inspiration from "./pages/Inspiration.jsx";
 import Tasks from "./pages/Tasks.jsx";
 import Plugins from "./pages/Plugins.jsx";
 import Rules from "./pages/Rules.jsx";
@@ -35,6 +38,9 @@ const ICON_PATHS = {
   puzzle: <><path d="M9 4h6v3.5a2 2 0 1 0 0 4V15H9v-3.5a2 2 0 1 1 0-4V4Z" transform="rotate(0 12 9.5)" /><path d="M4 15h5v3.5a1.8 1.8 0 1 0 3.6 0V15H20v-5h-3.5" /></>,
   rules: <><rect x="5" y="3.5" width="14" height="17" rx="1.5" /><path d="M8.5 8h7M8.5 12h7M8.5 16h4.5" /></>,
   settings: <><path d="M4 7.5h9M17 7.5h3M4 16.5h3M11 16.5h9" /><circle cx="15" cy="7.5" r="2.2" /><circle cx="9" cy="16.5" r="2.2" /></>,
+  compass: <><circle cx="12" cy="12" r="8.5" /><path d="m15.5 8.5-2.2 5-5 2.2 2.2-5 5-2.2Z" /></>,
+  world: <><circle cx="12" cy="12" r="8.5" /><path d="M3.5 12h17M12 3.5c2.8 2.3 4 5.2 4 8.5s-1.2 6.2-4 8.5c-2.8-2.3-4-5.2-4-8.5s1.2-6.2 4-8.5Z" /></>,
+  bulb: <><path d="M9.5 18h5M10.5 21h3" /><path d="M12 3.5a5.5 5.5 0 0 1 3 10.1c-.6.4-1 1.1-1 1.9h-4c0-.8-.4-1.5-1-1.9A5.5 5.5 0 0 1 12 3.5Z" /></>,
 };
 
 function NavIcon({ name }) {
@@ -49,13 +55,15 @@ function NavIcon({ name }) {
 const NAV = [
   { title: "创作", items: [
     { label: "首页", view: "home", icon: "home" },
+    { label: "创作向导", view: "guide", icon: "compass" },
     { label: "AI 助手", view: "assistant", icon: "chat" },
+    { label: "设定中心", view: "assets", icon: "world" },
     { label: "章节与账本", view: "workspace", icon: "book" },
     { label: "任务中心", view: "tasks", icon: "target" },
   ] },
   { title: "资产", items: [
+    { label: "灵感素材库", view: "inspiration", icon: "bulb" },
     { label: "模板库", view: "templates", icon: "grid" },
-    { label: "用量统计", view: "usage", icon: "chart" },
     { label: "快照底账", view: "snapshots", icon: "archive" },
     { label: "伏笔账本", view: "foreshadow", icon: "link" },
     { label: "图谱与文风", view: "graph", icon: "graph" },
@@ -228,7 +236,9 @@ export default function App() {
         <main className="page-fade mx-auto w-full max-w-6xl flex-1 p-6">
           {view === "home" && <Home go={go} />}
           {view === "workspace" && <Workspace autoOpen={autoBook} />}
-          {view === "usage" && <Usage />}
+          {view === "guide" && <Guide go={go} />}
+          {view === "assets" && <StoryAssets go={go} />}
+          {view === "inspiration" && <Inspiration />}
           {view === "settings" && <Settings go={go} />}
           {view === "snapshots" && <Snapshots />}
           {view === "foreshadow" && <Foreshadow />}

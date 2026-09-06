@@ -76,6 +76,28 @@ def put_settings(h, params):
     api_ok(h, {"ok": True, "settings": srv.public_settings(), "key_set": srv.KEY_SET})
 
 
+@route("GET", "inspiration")
+def get_inspiration(h, params):
+    """灵感素材库：books/_templates/灵感库/*.md 的清单+全文（只读，目录白名单锁死）。"""
+    lib = os.path.join(TEMPLATES_DIR, "灵感库")
+    items = []
+    if os.path.isdir(lib):
+        for fn in sorted(os.listdir(lib)):
+            if not fn.endswith(".md"):
+                continue
+            try:
+                with open(os.path.join(lib, fn), encoding="utf-8") as f:
+                    body = f.read()
+            except OSError:
+                continue
+            # 标题 = 文件首个 # 行；预览 = 去标题后前 60 字
+            head, _, rest = body.partition("\n")
+            title = head.lstrip("# ").strip() or fn[:-3]
+            items.append({"file": fn, "title": title,
+                          "preview": rest.strip().replace("\n", " ")[:60], "content": body})
+    api_ok(h, {"items": items})
+
+
 @route("POST", "settings/models")
 def post_settings_models(h, params):
     """配置向导第 2 步：拉 OpenAI 兼容 /models 列表（body {base_url, key}）。

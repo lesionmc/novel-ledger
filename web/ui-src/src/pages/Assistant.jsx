@@ -85,6 +85,11 @@ export default function Assistant({ go }) {
         setShowCreate(true);
         sessionStorage.removeItem("nl_assistant_open_create");
       }
+      // 创作向导等入口的预填：提示词进输入框、指定书自动挂上下文
+      const pf = sessionStorage.getItem("nl_assistant_prefill");
+      if (pf) { setInput(pf); sessionStorage.removeItem("nl_assistant_prefill"); }
+      const pb = sessionStorage.getItem("nl_assistant_prefill_book");
+      if (pb) { patchCur({ book: pb }); sessionStorage.removeItem("nl_assistant_prefill_book"); }
     } catch (e) {}
   }, []);
   useEffect(() => {

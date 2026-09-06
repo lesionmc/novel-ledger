@@ -74,6 +74,25 @@ def chat_stream(h, msgs, temperature, max_tokens=2000):
     try:
         it = iter(srv.llm_mod.chat_stream(msgs, **kw))
         first = next(it)  # 首 token：连接/鉴权等失败在此抛出，尚未发出任何 SSE 头
+    except StopIteration:
+        # 空流兜底：上游把预算花在思考上、零 content 直接结束流时，
+        # 退回非流式整段取回（llm_chat 内含 3 次重试 + max_tokens 下限 800）
+        try:
+            text = srv.llm_chat(msgs, temperature=temperature, max_tokens=max_tokens, action="Web对话兜底")
+        except Exception:
+            h.send_response(502)
+            h.send_header("Content-Type", "application/json")
+            h.end_headers()
+            h.wfile.write(json.dumps({"error": "上游模型波动（流式与非流式均空响应），稍后再试或在设置里配置备用厂商"}).encode("utf-8"))
+            return
+        h.send_response(200)
+        h.send_header("Content-Type", "text/event-stream; charset=utf-8")
+        h.send_header("Cache-Control", "no-cache")
+        h.end_headers()
+        h.wfile.write(b"event: delta\ndata: " + json.dumps(text, ensure_ascii=False).encode("utf-8") + b"\n\n")
+        h.wfile.write(b"event: done\ndata: {}\n\n")
+        h.wfile.flush()
+        return
     except Exception as e:
         h.send_response(502)
         h.send_header("Content-Type", "application/json")

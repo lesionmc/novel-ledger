@@ -6,6 +6,7 @@ import { api, apiPost, apiPut } from "../api.js";
    新建书也在这里：快捷卡「新建一本书」→ 填书名/选模板 → 建书成功直接挂上下文开聊。 */
 
 const LS_KEY = "nl_assistant_sessions_v1";
+const LS_QUICK = "nl_assistant_custom_quick";
 const HELLO = "我是你的写作助手。上方选一本书（或不选直接聊），可以让我：总结剧情 / 查前后矛盾 / 出章节点子 / 重写某一段 / 把想法整理成设定。也可以直接下指令：交叉审计第 N 章 / 重算账本 / 平台自检 / 读者试读 / 导出证据包。想开新书就点左下角「＋ 新建一本书」。";
 
 function uid() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 6); }
@@ -19,12 +20,16 @@ function loadSessions() {
 }
 
 function newSession() {
-  return { id: uid(), title: "新对话", book: "", ch: "", keepState: true,
+  return { id: uid(), title: "", book: "", ch: "", keepState: true,
            msgs: [{ role: "assistant", content: HELLO }], ts: Date.now() };
 }
 
 function saveSessions(arr) {
   try { localStorage.setItem(LS_KEY, JSON.stringify(arr.slice(0, 50))); } catch (e) {}
+}
+
+function loadQuick() {
+  try { const a = JSON.parse(localStorage.getItem(LS_QUICK) || "[]"); return Array.isArray(a) ? a.filter((x) => typeof x === "string") : []; } catch (e) { return []; }
 }
 
 const QUICK = ["用三句话总结目前已写的剧情", "检查已写章节有没有前后矛盾，列出来", "给下一章出 3 个可行的剧情方向", "目前哪些伏笔拖太久了？怎么收？"];
@@ -60,6 +65,7 @@ export default function Assistant({ go }) {
   const [chText, setChText] = useState("");
   const [templates, setTemplates] = useState([]);
   const [showCreate, setShowCreate] = useState(false);
+  const [customQ, setCustomQ] = useState(loadQuick); // 用户自定义快捷提示词
   const abortRef = useRef(null);
   const logRef = useRef(null);
 
@@ -71,6 +77,24 @@ export default function Assistant({ go }) {
   function setMsgs(updater) {
     setSessions((arr) => arr.map((s) => (s.id === activeId
       ? { ...s, msgs: typeof updater === "function" ? updater(s.msgs) : updater, ts: Date.now() } : s)));
+  }
+
+  function addQuick() {
+    const q = (prompt("添加自定义快捷提示词（会显示在快捷条上，可删除）：") || "").trim();
+    if (!q) return;
+    const next = [...customQ, q].slice(-12);
+    setCustomQ(next);
+    try { localStorage.setItem(LS_QUICK, JSON.stringify(next)); } catch (e) {}
+  }
+  function delQuick(q) {
+    const next = customQ.filter((x) => x !== q);
+    setCustomQ(next);
+    try { localStorage.setItem(LS_QUICK, JSON.stringify(next)); } catch (e) {}
+  }
+  function renameChat(s) {
+    const nn = prompt("重命名这条会话：", s.title || "");
+    if (nn == null) return;
+    setSessions((arr) => arr.map((x) => (x.id === s.id ? { ...x, title: nn.trim() } : x)));
   }
 
   useEffect(() => { saveSessions(sessions); }, [sessions]);
@@ -151,6 +175,8 @@ export default function Assistant({ go }) {
   async function send(text) {
     const t = (text || input).trim();
     if (!t || streaming) return;
+    // 首条消息自动命名会话（不再叫"新对话"）
+    if (!cur.title) patchCur({ title: t.slice(0, 14) });
     const intent = parseIntent(t);
     if (intent) { setInput(""); await runIntent(intent, t); return; }
     setInput(""); setStreaming(true);
@@ -266,8 +292,11 @@ export default function Assistant({ go }) {
               className={`group mb-1 cursor-pointer rounded-lg px-2.5 py-2 text-[13px] transition ${
                 s.id === activeId ? "bg-brandbg text-ink" : "text-inksoft hover:bg-paper hover:text-ink"}`}>
               <div className="flex items-center gap-1.5">
-                <span className="truncate">{s.title || "新对话"}</span>
+                <span className="truncate font-medium">{s.title || "新对话"}</span>
                 <span className="flex-1" />
+                <button onClick={(e) => { e.stopPropagation(); renameChat(s); }}
+                  title="重命名会话"
+                  className="hidden rounded px-1 text-[11px] text-inksoft hover:text-brand group-hover:block">✎</button>
                 <button onClick={(e) => { e.stopPropagation(); delChat(s.id); }}
                   title="删除会话"
                   className="hidden rounded px-1 text-[11px] text-inksoft hover:text-err group-hover:block">✕</button>
@@ -337,14 +366,24 @@ export default function Assistant({ go }) {
           )}
         </div>
 
-        {/* 快捷提问 */}
+        {/* 快捷提问（默认 4 条 + 自定义；最右「＋ 自定义」添加） */}
         <div className="flex flex-wrap gap-1.5 border-t border-line px-3 pt-2">
-          {QUICK.map((q) => (
-            <button key={q} onClick={() => send(q)} disabled={streaming}
-              className="rounded-full border border-line bg-panel px-3 py-1 text-xs text-inksoft transition hover:border-brand2 hover:text-brand disabled:opacity-40">
-              {q}
-            </button>
+          {[...QUICK, ...customQ].map((q, qi) => (
+            <span key={q + qi} className="group/q relative">
+              <button onClick={() => send(q)} disabled={streaming}
+                className="rounded-full border border-line bg-panel px-3 py-1 pr-6 text-xs text-inksoft transition hover:border-brand2 hover:text-brand disabled:opacity-40">
+                {q}
+              </button>
+              {qi >= QUICK.length && (
+                <button onClick={() => delQuick(q)} title="删除该快捷词"
+                  className="absolute -right-0.5 -top-1 hidden h-4 w-4 items-center justify-center rounded-full bg-err text-[9px] text-white group-hover/q:flex">✕</button>
+              )}
+            </span>
           ))}
+          <button onClick={addQuick} title="添加自定义快捷提示词"
+            className="rounded-full border border-dashed border-line px-3 py-1 text-xs text-inksoft transition hover:border-brand2 hover:text-brand">
+            ＋ 自定义
+          </button>
         </div>
 
         {/* 输入区 */}

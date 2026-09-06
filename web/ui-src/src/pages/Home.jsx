@@ -1,5 +1,5 @@
-import React, { useEffect, useState } from "react";
-import { api, apiPost, apiPutJson, fmt } from "../api.js";
+﻿import React, { useEffect, useState } from "react";
+import { api, apiPost, apiPutJson } from "../api.js";
 import { useTasks } from "../tasksStore.js";
 
 /* 首页工作台：继续的故事 + 指标（观感对齐竞品的统计卡 + 状态点） */
@@ -10,7 +10,6 @@ export default function Home({ go }) {
   const [keySet, setKeySet] = useState(false);
   const [books, setBooks] = useState([]);
   const [details, setDetails] = useState({});
-  const [usage, setUsage] = useState(null);
   const [err, setErr] = useState("");
   const { tasks } = useTasks();
   const cur = (tasks || []).find((t) => ["running", "paused", "failed"].includes(norm(t.status)));
@@ -58,7 +57,6 @@ export default function Home({ go }) {
         const ds = {};
         await Promise.all(bl.map(async (b) => { try { ds[b] = await api(`/api/book/${encodeURIComponent(b)}`); } catch (e) {} }));
         setDetails(ds);
-        try { setUsage((await api("/api/usage")).summary); } catch (e) {}
       } catch (e) { setErr(e.message); }
     })();
   }, []);
@@ -129,11 +127,36 @@ export default function Home({ go }) {
         })}
       </div>
 
-      <div className="mb-6 grid grid-cols-2 gap-3 md:grid-cols-4">
+      <div className="mb-6 grid grid-cols-2 gap-3">
         <Stat num={books.length} label="书架" />
         <Stat num={totalChapters} label="已写章节" />
-        <Stat num={fmt(usage?.total)} label="累计 tokens" />
-        <Stat num={usage?.write_avg != null ? fmt(usage.write_avg) : "—"} label="平均每章 tokens" />
+      </div>
+
+      {/* 新手流程（小白照着走：点击任意一步直达对应功能） */}
+      <div className="mb-4 rounded-xl border border-line bg-panel p-4 shadow-sm">
+        <div className="mb-2 text-[13px] font-bold text-ink">🧭 新手指引：从一句话想法到能发布的成书（点任意一步开始）</div>
+        <div className="flex flex-wrap items-center gap-1.5 text-[12.5px]">
+          {[
+            ["1 构思立意", "让 AI 给我 8 个一句话卖点供我挑选。我的初步想法：", "assistant"],
+            ["2 世界观·人物", "请先扮演最挑剔的编辑拷问我的设定，再帮我把世界观（规则一行一条）和人物卡（欲望/缺陷/成长弧/声口）整理成文档。设定：", "assets"],
+            ["3 大纲", "基于立项卡和人物卡：分 3~4 卷 → 第一卷展开成章纲（事件→冲突→章末钩）→ 自查因果链与伏笔。", "assets"],
+            ["4 写正文", "", "workspace"],
+            ["5 评审修订", "分别扮演追更读者/毒舌编审/故事医生，各挑一遍最新一章的毛病，再跑一致性检查。", "assistant"],
+            ["6 去AI味·定稿", "", "plugins"],
+          ].map(([label, prompt, view], i) => (
+            <React.Fragment key={label}>
+              <button onClick={() => {
+                if (view === "assistant" && prompt) { try { sessionStorage.setItem("nl_assistant_prefill", prompt); } catch (e) {} }
+                go(view);
+              }}
+                className="rounded-full border border-line bg-paper px-3 py-1 font-semibold text-inksoft transition hover:border-brand2 hover:text-brand">
+                {label}
+              </button>
+              {i < 5 && <span className="text-inksoft/50">→</span>}
+            </React.Fragment>
+          ))}
+        </div>
+        <div className="mt-2 text-[11.5px] text-inksoft/80">三条保命纪律：大纲没定稿禁写正文；设定/伏笔当天记进文件；AI 初稿必须过去 AI 味 + 你终审才算完成。</div>
       </div>
 
       <p className="text-[12px] text-inksoft/70">

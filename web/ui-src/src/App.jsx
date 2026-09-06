@@ -1,16 +1,12 @@
 import React, { useEffect, useState } from "react";
 import Home from "./pages/Home.jsx";
 import Workspace from "./pages/Workspace.jsx";
-import Usage from "./pages/Usage.jsx";
 import Settings from "./pages/Settings.jsx";
-import Snapshots from "./pages/Snapshots.jsx";
-import Foreshadow from "./pages/Foreshadow.jsx";
 import Graph from "./pages/Graph.jsx";
 import Assistant from "./pages/Assistant.jsx";
-import Guide from "./pages/Guide.jsx";
+import Tasks from "./pages/Tasks.jsx";
 import StoryAssets from "./pages/StoryAssets.jsx";
 import Inspiration from "./pages/Inspiration.jsx";
-import Tasks from "./pages/Tasks.jsx";
 import Plugins from "./pages/Plugins.jsx";
 import Rules from "./pages/Rules.jsx";
 import Templates from "./pages/Templates.jsx";
@@ -55,7 +51,6 @@ function NavIcon({ name }) {
 const NAV = [
   { title: "创作", items: [
     { label: "首页", view: "home", icon: "home" },
-    { label: "创作向导", view: "guide", icon: "compass" },
     { label: "AI 助手", view: "assistant", icon: "chat" },
     { label: "设定中心", view: "assets", icon: "world" },
     { label: "章节与账本", view: "workspace", icon: "book" },
@@ -64,8 +59,6 @@ const NAV = [
   { title: "资产", items: [
     { label: "灵感素材库", view: "inspiration", icon: "bulb" },
     { label: "模板库", view: "templates", icon: "grid" },
-    { label: "快照底账", view: "snapshots", icon: "archive" },
-    { label: "伏笔账本", view: "foreshadow", icon: "link" },
     { label: "图谱与文风", view: "graph", icon: "graph" },
   ] },
   { title: "系统", items: [
@@ -236,12 +229,9 @@ export default function App() {
         <main className="page-fade mx-auto w-full max-w-6xl flex-1 p-6">
           {view === "home" && <Home go={go} />}
           {view === "workspace" && <Workspace autoOpen={autoBook} />}
-          {view === "guide" && <Guide go={go} />}
           {view === "assets" && <StoryAssets go={go} />}
           {view === "inspiration" && <Inspiration />}
           {view === "settings" && <Settings go={go} />}
-          {view === "snapshots" && <Snapshots />}
-          {view === "foreshadow" && <Foreshadow />}
           {view === "graph" && <Graph />}
           {view === "assistant" && <Assistant go={go} />}
           {view === "tasks" && <Tasks />}

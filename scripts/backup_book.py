@@ -3,6 +3,7 @@
 """backup_book.py —— R34 一键备份：一本书的全家桶 zip（纯标准库）
 
 打包内容（拍板 Q21 全家桶）：设定/角色卡/大纲 + story_state.md + chapters/（正文+体检/审计/章纲/bak）+ _snapshots/
+排除：_vector/ 与 _recall/（向量召回产物，可能含 chromadb 巨型二进制库，不进 zip）
 存放位置：项目根 backups/（拍板 Q22：保留最近 --keep 份，默认 10；配合每周手动拷一份到外部存储）
 """
 import argparse
@@ -12,6 +13,9 @@ import zipfile
 from datetime import datetime
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+# 不进 zip 的子目录：向量库/召回产物（可能含 chromadb 巨型二进制库，体积不可控）
+EXCLUDE_DIRS = {"_vector", "_recall"}
 
 
 def backup_book(book_dir: str, out_dir: str = None, keep: int = 10) -> str:
@@ -28,6 +32,7 @@ def backup_book(book_dir: str, out_dir: str = None, keep: int = 10) -> str:
     n = 0
     with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as z:
         for base, dirs, files in os.walk(book):
+            dirs[:] = [d for d in dirs if d not in EXCLUDE_DIRS]  # 原地剪枝，整棵子目录不进 zip
             for fn in files:
                 full = os.path.join(base, fn)
                 rel = os.path.relpath(full, book)

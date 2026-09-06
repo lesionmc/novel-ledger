@@ -1,10 +1,47 @@
 @echo off
-chcp 65001 >nul
-cd /d "%~dp0.."
+cd /d "%~dp0"
+title novel-ledger Web Workbench
 echo ============================================
-echo  novel-ledger Web å·¥ä½œå°
-echo  å¯åŠ¨åè¯·ç”¨æµè§ˆå™¨æ‰“å¼€ http://127.0.0.1:8801
-echo  æŒ‰ Ctrl+C åœæ­¢
+echo  novel-ledger Web ¹¤×÷Ì¨
+echo  Êı¾İÈ«ÔÚ±¾»ú ¡¤ ¹Ø±Õ±¾´°¿Ú¼´Í£Ö¹·şÎñ
 echo ============================================
-"C:\Users\Administrator\.workbuddy\binaries\python\versions\3.13.12\python.exe" web\server.py --port 8801
+
+rem ¶Ë¿ÚÒÑ±»Õ¼ÓÃ = ·şÎñÒÑÔÚÅÜ£¬Ö±½Ó¿ªä¯ÀÀÆ÷
+netstat -ano | findstr ":8801" | findstr "LISTENING" >nul 2>&1
+if %errorlevel%==0 (
+    echo ¼ì²âµ½·şÎñÒÑ¾­ÔÚÔËĞĞ£¬Ö±½ÓÎªÄã´ò¿ªä¯ÀÀÆ÷¡­
+    start "" http://127.0.0.1:8801/ui/
+    timeout /t 4 /nobreak >nul
+    exit /b 0
+)
+
+rem 3 Ãëºó×Ô¶¯´ò¿ªä¯ÀÀÆ÷£¨¸ø·şÎñÁôÆô¶¯Ê±¼ä£»explorer ÃâÒıºÅ¿Ó£©
+start "" /min cmd /c "timeout /t 3 /nobreak >nul & explorer http://127.0.0.1:8801/ui/"
+
+set PYTHONUTF8=1
+
+rem ÒÀ´Î³¢ÊÔ£º±¾»ú Python 3.12 ¡ú WorkBuddy ÍĞ¹Ü ¡ú PATH£¨À­ºÚÉÌµê¼Ù±ğÃû£©
+if exist "%LocalAppData%\Programs\Python\Python312\python.exe" (
+    echo [Æô¶¯] Ê¹ÓÃ±¾»ú Python 3.12¡­
+    "%LocalAppData%\Programs\Python\Python312\python.exe" web\server.py --port 8801
+    goto end
+)
+if exist "C:\Users\lhx\.workbuddy\binaries\python\versions\3.13.12\python.exe" (
+    echo [Æô¶¯] Ê¹ÓÃ WorkBuddy ÍĞ¹Ü Python¡­
+    "C:\Users\lhx\.workbuddy\binaries\python\versions\3.13.12\python.exe" web\server.py --port 8801
+    goto end
+)
+set "PYEXE="
+for /f "delims=" %%p in ('where python 2^>nul') do (
+    echo %%p | findstr /i "WindowsApps" >nul 2>&1 || set "PYEXE=%%p"
+)
+if defined PYEXE (
+    echo [Æô¶¯] Ê¹ÓÃ PATH ÖĞµÄ Python¡­
+    "%PYEXE%" web\server.py --port 8801
+    goto end
+)
+echo Ã»ÓĞÕÒµ½¿ÉÓÃµÄ Python¡£Çë°²×° Python 3.9+£¨¹´Ñ¡ Add to PATH£©ºóÖØÊÔ¡£
+:end
+echo.
+echo ·şÎñÒÑÍ£Ö¹¡£
 pause

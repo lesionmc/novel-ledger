@@ -1,43 +1,27 @@
 # -*- coding: utf-8 -*-
-"""novel-ledger · 本地 Web 工作台后端
+"""novel-ledger · 本地 Web 工作台后端（入口 + 路由表 + 共享基础设施）
 
-纯 Python 标准库（零第三方依赖）。桥接 scripts/ 下两个引擎：
-  write_chapter.py  连载引擎（写章 / 审计）
-  deai.py           去 AI 味引擎（scan / polish / apply）
+纯 Python 标准库（零第三方依赖）。桥接 scripts/ 下两个引擎：write_chapter.py（连载引擎，写章/审计）与 deai.py（去 AI 味引擎，scan/polish/apply）。
 
 启动：
   python web/server.py [--port 8801]
 浏览器打开 http://127.0.0.1:8801
 
-API 一览（均返回 JSON）：
-  GET  /api/status                       引擎与 key 就绪状态（含 settings 回显）
-  GET  /api/settings                     读 .env 中白名单配置（不含密钥回显到前端日志）
-  PUT  /api/settings                     {"changes":{...}} 写回 .env，实时生效
-  POST /api/settings/test                ping 一次模型验证连通（4 token）
-  POST /api/chat                         {"messages":[...], "stream":bool} 多轮对话；stream=true 为 SSE
-  GET  /api/books                        书列表
-  POST /api/books                        {"name": "新书"} 从 sample_book 建书并自动 init-state
-  POST /api/book/from-chat               {"name":..., "files":{设定,角色卡,大纲}} AI 建书（写三件套+初始化）
-  GET  /api/book/{book}                  书详情（章节列表 + next_no + has_state）
-  GET  /api/book/{book}/files            chapters/ 下正文与报告产物列表
-  GET  /api/book/{book}/doc/{doc}        读 设定/角色卡/大纲/账本 文本 (doc=设定|角色卡|大纲|state)
-  PUT  /api/book/{book}/doc/{doc}        保存文本（body 原文）
-  GET  /api/book/{book}/ch/{no}          读章节正文
-  PUT  /api/book/{book}/ch/{no}          保存章节正文
-  POST /api/book/{book}/write            {"no":可选} 写下一章（长时，同步等待；缺账本自动 init）
-  POST /api/book/{book}/audit            {"no":N} 一致性审计（缺账本自动 init）
-  POST /api/book/{book}/scan             全书 AI 腔体检（本地零 token）
-  POST /api/book/{book}/polish           {"no":N} 去味精判报告
-  POST /api/book/{book}/apply            {"no":N} 应用改写（自动备份）
-  GET  /api/book/{book}/file/{rel}       读 chapters/ 下报告/diff/正文文件（白名单防穿越）
+本文件只保留：Handler（同源守卫 → 静态 → 路由表分派）、静态服务、.env 读写、
+llm_chat、脚本路径常量与兜底路由。业务路由按域拆在（依赖方向 server → api_* → common）：
+  api_books.py      书 CRUD/章读写/doc/export/rename/import-txt/模板建书
+  api_engine.py     引擎动作（write/audit/scan/polish/apply/evaluate/publish-check/checkup/fix/plan/plan-save/resize/deconstruct/backup）
+  api_tasks.py      task start/control/查询 + 后台连写调度全套
+  api_assistant.py  chat SSE / write-stream
+  api_meta.py       status/settings/usage/plugins/rules/templates/tpl + v0.8/9 扩展（style/graph/vector/sample-chapters/privacy-scan 等）
+
+API 一览（均返回 JSON；完整端点清单与行为见各 api_*.py 的 @route 注册处）。
 """
 import json
 import os
-import re
-import shutil  # 建书复制 sample_book 必用（漏 import 会让建书/建书向导 500，2026-09-04 修复）
 import subprocess
 import sys
-import time
+import traceback
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -47,14 +31,34 @@ SAMPLE_DIR = os.path.join(ROOT, "sample_book")
 SCRIPTS_DIR = os.path.join(ROOT, "scripts")
 WEB_DIR = os.path.join(ROOT, "web")
 ENV_PATH = os.path.join(ROOT, ".env")
-sys.path.insert(0, SCRIPTS_DIR)  # 让 server 可直接 import 引擎侧公共模块（usage_log 等，R48）
+for _p in (WEB_DIR, SCRIPTS_DIR):
+    if _p not in sys.path:
+        sys.path.insert(0, _p)  # web 件（common/api_*）与引擎侧公共模块（llm/usage_log 等，R48）
+try:
+    import llm as llm_mod  # scripts/llm.py：统一 LLM 网关（chat_stream 流式生成器由 R1 侧提供）
+except ImportError:  # llm.py 尚未就位时不阻塞 server 启动，流式端点运行时再报错
+    llm_mod = None
+
+from common import (_USAGE_LOCK,  # test_routes 断言用量锁存在（S._USAGE_LOCK）
+                    api_error, api_ok, book_path, match_route, route,
+                    valid_tpl_name)  # 兼容导出：test_routes 以 S.valid_tpl_name 断言
 
 WRITE_CH = os.path.join(SCRIPTS_DIR, "write_chapter.py")
 DEAI = os.path.join(SCRIPTS_DIR, "deai.py")
 BACKUP = os.path.join(SCRIPTS_DIR, "backup_book.py")
-DOCS = ("设定", "角色卡", "大纲", "state")
-DOC_FILE = {"设定": "设定.md", "角色卡": "角色卡.md", "大纲": "大纲.md", "state": "story_state.md"}
+STYLE_LEARN = os.path.join(SCRIPTS_DIR, "style_learn.py")   # v0.8 文风学习
+REL_GRAPH = os.path.join(SCRIPTS_DIR, "relation_graph.py")  # v0.8 关系图谱
+VECTOR = os.path.join(SCRIPTS_DIR, "vector_recall.py")      # v0.8/9 向量召回（index / recall）
+CHECKUP = os.path.join(SCRIPTS_DIR, "checkup.py")           # v0.5 章节体检台（evaluate/publish-check 零 token）
+RULES_DIR = os.path.join(ROOT, "rules")                     # v0.6 提示词管理
 PORT = 8000
+
+# ---- 业务路由注册（import 即把各自 @route 挂进 common.ROUTES；顺序即优先级）----
+import api_books  # noqa: E402
+import api_engine  # noqa: E402
+import api_tasks  # noqa: E402
+import api_assistant  # noqa: E402
+import api_meta  # noqa: E402
 
 
 def _check():
@@ -125,8 +129,10 @@ def write_settings(changes):
                     break
         if not hit:
             lines.append(f"{k}={v}\n")
-    with open(ENV_PATH, "w", encoding="utf-8") as f:
+    tmp = ENV_PATH + ".tmp"  # 原子写：先落同目录临时文件再 os.replace，避免半截 .env
+    with open(tmp, "w", encoding="utf-8") as f:
         f.writelines(lines)
+    os.replace(tmp, ENV_PATH)
     global KEY_SET
     KEY_SET = bool(read_settings().get("AGNES_API_KEY", ""))
     return read_settings()
@@ -142,20 +148,11 @@ def live_env():
     }
 
 
-_LAST_USAGE = None  # R48：最近一次 llm_chat 的用量（供接口回传前端显示）
-
-
-def parse_usage(out: str, err: str):
-    """从引擎输出解析 [用量] 行（R48→前端显示本次消耗）。"""
-    m = re.search(r"\[用量\] 输入 (\d+) / 输出 (\d+) / 总 (\d+)", out + err)
-    return {"in": int(m.group(1)), "out": int(m.group(2)), "total": int(m.group(3))} if m else None
-
-
 def llm_chat(messages, temperature=0.7, max_tokens=2000, action="Web对话"):
     """用配置的模型做一次 chat（供对话建书/测试连接用）。返回文本。
     R48：响应带 usage 时顺带记用量流水，记账失败不影响返回。"""
-    global _LAST_USAGE
-    _LAST_USAGE = None
+    from common import set_last_usage
+    set_last_usage(None)
     cfg = live_env()
     if not cfg["key"]:
         raise RuntimeError("未配置 AGNES_API_KEY（请在 ⚙ 设置 里填写）")
@@ -177,9 +174,9 @@ def llm_chat(messages, temperature=0.7, max_tokens=2000, action="Web对话"):
         data = json.loads(resp.read().decode("utf-8"))
     u = data.get("usage") or {}
     if u:
-        _LAST_USAGE = {"in": u.get("prompt_tokens") or 0,
-                       "out": u.get("completion_tokens") or 0,
-                       "total": u.get("total_tokens") or ((u.get("prompt_tokens") or 0) + (u.get("completion_tokens") or 0))}
+        set_last_usage({"in": u.get("prompt_tokens") or 0,
+                        "out": u.get("completion_tokens") or 0,
+                        "total": u.get("total_tokens") or ((u.get("prompt_tokens") or 0) + (u.get("completion_tokens") or 0))})
         try:
             import usage_log
             usage_log.log_usage(action, cfg["model"],
@@ -188,58 +185,6 @@ def llm_chat(messages, temperature=0.7, max_tokens=2000, action="Web对话"):
             pass  # 记账失败不影响对话（R48 设计约束）
     choice = (data.get("choices") or [{}])[0]
     return (choice.get("message") or {}).get("content", "").strip()
-
-
-def book_path(name):
-    """安全取书目录：name 只能是合法目录名，防路径穿越。"""
-    if not name or name in (".", "..") or re.search(r"[/\\]", name):
-        return None
-    p = os.path.join(BOOKS_DIR, name)
-    return p if os.path.isdir(p) else None
-
-
-def list_books():
-    if not os.path.isdir(BOOKS_DIR):
-        return []
-    return sorted(d for d in os.listdir(BOOKS_DIR)
-                  if os.path.isdir(os.path.join(BOOKS_DIR, d))
-                  and not d.startswith(".") and not d.startswith("_"))
-
-
-def chapter_list(p):
-    ch_dir = os.path.join(p, "chapters")
-    if not os.path.isdir(ch_dir):
-        return []
-    return sorted((int(m.group(1)), m.group(0))
-                  for m in (re.match(r"ch(\d+)\.md$", f) for f in os.listdir(ch_dir))
-                  if m)
-
-
-def chapter_title(p, fname):
-    """取章节标题：正文第一行的 # 标题（去掉 # 前缀）；取不到返回空。"""
-    try:
-        with open(os.path.join(p, "chapters", fname), encoding="utf-8") as f:
-            for line in f:
-                s = line.strip()
-                if not s:
-                    continue
-                return re.sub(r"^#+\s*", "", s)[:40]
-    except Exception:
-        pass
-    return ""
-
-
-def read_text(p):
-    try:
-        with open(p, encoding="utf-8") as f:
-            return f.read()
-    except FileNotFoundError:
-        return None
-
-
-def write_text(p, s):
-    with open(p, "w", encoding="utf-8") as f:
-        f.write(s)
 
 
 def run_engine(args, timeout=900):
@@ -253,30 +198,6 @@ def run_engine(args, timeout=900):
         return (False, "", "引擎执行超时（超过 %ss）" % timeout)
 
 
-def next_chapter_no(p):
-    chs = chapter_list(p)
-    return (max(n for n, _ in chs) + 1) if chs else 1
-
-
-def api_error(h, code, msg):
-    body = json.dumps({"error": msg}, ensure_ascii=False).encode("utf-8")
-    h.send_response(code)
-    h.send_header("Content-Type", "application/json; charset=utf-8")
-    h.send_header("Content-Length", str(len(body)))
-    h.end_headers()
-    h.wfile.write(body)
-
-
-def api_ok(h, obj):
-    body = json.dumps(obj, ensure_ascii=False).encode("utf-8")
-    h.send_response(200)
-    h.send_header("Content-Type", "application/json; charset=utf-8")
-    h.send_header("Content-Length", str(len(body)))
-    h.send_header("Cache-Control", "no-store")
-    h.end_headers()
-    h.wfile.write(body)
-
-
 def serve_static(h, path):
     rel = path.lstrip("/")
     # React 工作台（A′ 预构建产物）；v0.2 起转正：/ 与 /ui/ 都指向新工作台
@@ -286,7 +207,8 @@ def serve_static(h, path):
         if rel.startswith("assets/"):
             sub = rel  # /assets/* → web/ui/assets/*
         full = os.path.normpath(os.path.join(WEB_DIR, "ui", sub))
-        if not full.startswith(os.path.join(WEB_DIR, "ui")):
+        # 前缀必须带 os.sep：防 ui_evil 这类兄弟目录名绕过裸 startswith
+        if not full.startswith(os.path.join(WEB_DIR, "ui") + os.sep):
             api_error(h, 403, "forbidden")
             return
         if not os.path.isfile(full):
@@ -315,7 +237,7 @@ def serve_static(h, path):
     if rel.startswith("static/"):
         rel = rel[len("static/"):]
     full = os.path.normpath(os.path.join(WEB_DIR, "static", rel))
-    if not full.startswith(os.path.join(WEB_DIR, "static")):
+    if not full.startswith(os.path.join(WEB_DIR, "static") + os.sep):
         api_error(h, 403, "forbidden")
         return
     if not os.path.isfile(full):
@@ -338,6 +260,9 @@ def _send_static_file(h, full):
     h.wfile.write(data)
 
 
+class _BadJSON(Exception):
+    """请求体不是合法 JSON（_read_json 抛出，do_POST/do_PUT 统一转 400）。"""
+
 
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):
@@ -348,9 +273,57 @@ class Handler(BaseHTTPRequestHandler):
         raw = self.rfile.read(n) if n else b""
         if not raw:
             return {}
-        return json.loads(raw.decode("utf-8"))
+        try:
+            return json.loads(raw.decode("utf-8"))
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            raise _BadJSON  # do_POST/do_PUT 捕获后统一回 400「请求体不是合法 JSON」
 
-    # ---------------- 分派 ----------------
+    def _get_no(self, data):
+        """从请求体取 "no" 并校验为正整数；非法直接回 400 并返回 None。"""
+        try:
+            no = int(data.get("no"))
+        except (TypeError, ValueError):
+            api_error(self, 400, "no 需为正整数")
+            return None
+        if no < 1:
+            api_error(self, 400, "no 需为正整数")
+            return None
+        return no
+
+    def _same_origin_guard(self):
+        """CSRF 防护（POST/PUT 入口调用）：校验 Origin 头。
+        无 Origin 放行（curl / 同源 GET 表单等非浏览器场景）；
+        Origin 的 host 与请求 Host 头一致（同源）放行；其余 403 拒绝。"""
+        origin = self.headers.get("Origin")
+        if not origin:
+            return True
+        try:
+            ohost = urllib.parse.urlsplit(origin).netloc
+        except Exception:
+            ohost = ""
+        if ohost and ohost == (self.headers.get("Host") or ""):
+            return True
+        api_error(self, 403, "cross-origin request blocked")
+        return False
+
+    def _run_or_502(self, script, args, timeout=900):
+        """v0.8/v0.9 长任务路由统一入口：引擎脚本未就位 → 502（业务语义明确的降级，
+        而非 500/no route）；就位则跑引擎（子进程，cwd=项目根）。
+        返回 (ok, stdout, stderr)；已回 502 时返回 None（调用方直接 return）。"""
+        if not os.path.isfile(script):
+            api_error(self, 502, "引擎脚本未就位（scripts/%s）——请先升级引擎到 v0.8+"
+                      % os.path.basename(script))
+            return None
+        return run_engine(args, timeout=timeout)
+
+    # ---------------- 分派（路由表） ----------------
+    def _dispatch(self, method, segs):
+        fn, params = match_route(method, segs)
+        if fn is None:
+            return False
+        fn(self, params)
+        return True
+
     def do_GET(self):
         parsed = urllib.parse.urlparse(self.path)
         path = urllib.parse.unquote(parsed.path)
@@ -360,585 +333,100 @@ class Handler(BaseHTTPRequestHandler):
                 serve_static(self, path)
                 return
             if segs[0] == "api":
-                self.handle_api_get(segs[1:])
+                if not self._dispatch("GET", segs[1:]):
+                    api_error(self, 404, "no route")
                 return
             api_error(self, 404, "unknown path")
         except BrokenPipeError:
             pass
         except Exception as e:
-            api_error(self, 500, f"{type(e).__name__}: {e}")
+            # 兜底 500：响应只回「类型名: 服务器内部错误」防内部细节泄露；完整异常+栈进 stderr
+            sys.stderr.write("  [web] 500 %s: %s\n" % (type(e).__name__, e))
+            traceback.print_exc()
+            api_error(self, 500, f"{type(e).__name__}: 服务器内部错误")
 
     def do_POST(self):
+        if not self._same_origin_guard():
+            return
         parsed = urllib.parse.urlparse(self.path)
         path = urllib.parse.unquote(parsed.path)
         segs = [s for s in path.split("/") if s]
         try:
             if segs[:1] == ["api"]:
-                self.handle_api_post(segs[1:])
+                if not self._dispatch("POST", segs[1:]):
+                    api_error(self, 404, "no route")
                 return
             api_error(self, 404, "unknown path")
         except BrokenPipeError:
             pass
+        except _BadJSON:
+            api_error(self, 400, "请求体不是合法 JSON")
         except Exception as e:
-            api_error(self, 500, f"{type(e).__name__}: {e}")
+            sys.stderr.write("  [web] 500 %s: %s\n" % (type(e).__name__, e))
+            traceback.print_exc()
+            api_error(self, 500, f"{type(e).__name__}: 服务器内部错误")
 
     def do_PUT(self):
+        if not self._same_origin_guard():
+            return
         parsed = urllib.parse.urlparse(self.path)
         path = urllib.parse.unquote(parsed.path)
         segs = [s for s in path.split("/") if s]
         try:
             if segs[:1] == ["api"]:
-                self.handle_api_put(segs[1:])
+                if not self._dispatch("PUT", segs[1:]):
+                    api_error(self, 404, "no route")
                 return
             api_error(self, 404, "unknown path")
         except BrokenPipeError:
             pass
+        except _BadJSON:
+            api_error(self, 400, "请求体不是合法 JSON")
         except Exception as e:
-            api_error(self, 500, f"{type(e).__name__}: {e}")
+            sys.stderr.write("  [web] 500 %s: %s\n" % (type(e).__name__, e))
+            traceback.print_exc()
+            api_error(self, 500, f"{type(e).__name__}: 服务器内部错误")
 
-    # ---------------- GET ----------------
-    def handle_api_get(self, segs):
-        if segs == ["status"]:
-            api_ok(self, {"ok": True, "key_set": KEY_SET, "books_dir": BOOKS_DIR,
-                           "settings": public_settings()})
+    # ---------------- SSE 流式对话（主体在 api_assistant.chat_stream） ----------------
+    def _chat_stream(self, msgs, temperature, max_tokens=2000):
+        from api_assistant import chat_stream
+        chat_stream(self, msgs, temperature, max_tokens)
+
+
+# ---- 兜底路由（最后注册）：还原原 if 链「书不存在优先于 no route」的报错口径 ----
+@route("GET", "book/{book}/{rest...}")
+def _book_get_fallback(h, params):
+    # 原 GET book 块对一切 len>=2 的 /api/book/{b}/... 先查书再匹配子路由
+    p = book_path(params["book"])
+    if not p:
+        api_error(h, 404, "书不存在: " + params["book"])
+        return
+    api_error(h, 404, "no route")
+
+
+@route("POST", "book/{book}/{rest...}")
+def _book_post_fallback(h, params):
+    # 原 POST 口径：len==3 的未知动作与 task/* 的未知子动作会先查书；
+    # 更深/更浅的未知路径不会进 book 分支，直接 no route。
+    rest = params["rest"]
+    if len(rest) == 1 or (len(rest) == 2 and rest[0] == "task"):
+        p = book_path(params["book"])
+        if not p:
+            api_error(h, 404, "书不存在: " + params["book"])
             return
-        if segs == ["settings"]:
-            api_ok(self, {"settings": public_settings()})
+    api_error(h, 404, "no route")
+
+
+@route("PUT", "book/{book}/{rest...}")
+def _book_put_fallback(h, params):
+    # 原 PUT 口径：仅 len(segs)==4 的未知子路径（doc/ch 之外的）先查书；其余直接 no route。
+    rest = params["rest"]
+    if len(rest) == 2:
+        p = book_path(params["book"])
+        if not p:
+            api_error(h, 404, "书不存在: " + params["book"])
             return
-        if segs == ["usage"]:
-            # R48 用量记账：读本地流水现算汇总（零成本、零外呼）
-            import usage_log
-            api_ok(self, {"summary": usage_log.aggregate(usage_log.load_entries())})
-            return
-        if segs == ["books"]:
-            api_ok(self, {"books": list_books()})
-            return
-        if segs and segs[0] == "book" and len(segs) >= 2:
-            name = segs[1]
-            p = book_path(name)
-
-            if not p:
-                api_error(self, 404, "书不存在: " + name)
-                return
-            if len(segs) == 3 and segs[2] == "export":
-                # 导出全书：所有章节按序合并为一个 txt 下载
-                chs = chapter_list(p)
-                parts = [f"《{name}》\n导出时间：{time.strftime('%Y-%m-%d %H:%M')}\n共 {len(chs)} 章\n"]
-                for n, f in chs:
-                    body = read_text(os.path.join(p, "chapters", f)) or ""
-                    title = chapter_title(p, f)
-                    parts.append(f"\n\n{'=' * 24}\n第 {n} 章  {title}\n{'=' * 24}\n\n{body.strip()}")
-                data = "\n".join(parts).encode("utf-8")
-                self.send_response(200)
-                self.send_header("Content-Type", "text/plain; charset=utf-8")
-                self.send_header("Content-Disposition", f"attachment; filename*=UTF-8''{urllib.parse.quote(name + '-全书.txt')}")
-                self.send_header("Content-Length", str(len(data)))
-                self.end_headers()
-                self.wfile.write(data)
-                return
-
-            if len(segs) == 2:
-                snap_dir = os.path.join(p, "_snapshots")
-                snaps = sorted(f for f in (os.listdir(snap_dir) if os.path.isdir(snap_dir) else [])
-                               if re.match(r"ch\d+\.state\.md$", f))
-                # R35 伏笔超期：以最近已写章为"当前章"计算
-                import write_chapter as _wc
-                chs = chapter_list(p)
-                cur = chs[-1][0] if chs else 0
-                try:
-                    overdue = _wc.overdue_foreshadows(read_text(os.path.join(p, "story_state.md")), cur)
-                except Exception:
-                    overdue = []
-                api_ok(self, {
-                    "name": name,
-                    "chapters": [{"no": n, "file": f, "title": chapter_title(p, f),
-                                  "size": os.path.getsize(os.path.join(p, "chapters", f))}
-                                 for n, f in chs],
-                    "next_no": next_chapter_no(p),
-                    "has_state": os.path.exists(os.path.join(p, "story_state.md")),
-                    "snapshots": snaps,          # R47 章快照底账
-                    "overdue": [{"text": o["text"], "planted": o["planted"],
-                                 "overdue_by": o["overdue_by"]} for o in overdue],  # R35
-                })
-                return
-            if len(segs) == 4 and segs[2] == "doc":
-                doc = segs[3]
-                if doc not in DOCS:
-                    api_error(self, 404, "doc 必须是 " + "|".join(DOCS))
-                    return
-                txt = read_text(os.path.join(p, DOC_FILE[doc]))
-                if txt is None:
-                    api_error(self, 404, "文件不存在")
-                    return
-                api_ok(self, {"doc": doc, "content": txt})
-                return
-            if len(segs) == 4 and segs[2] == "ch":
-                if not re.fullmatch(r"(\d+)", segs[3]):
-                    api_error(self, 400, "章号格式错误")
-                    return
-                no = int(segs[3])
-                txt = read_text(os.path.join(p, "chapters", f"ch{no:03d}.md"))
-                if txt is None:
-                    api_error(self, 404, "该章不存在")
-                    return
-                api_ok(self, {"no": no, "content": txt})
-                return
-            if len(segs) >= 4 and segs[2] == "file":
-                rel = "/".join(segs[3:])
-                if (not re.fullmatch(r"chapters/[^/]+\.(md|json)", rel)
-                        and rel != "story_state.md"
-                        and not re.fullmatch(r"_snapshots/ch\d+\.state\.md", rel)):  # R47 快照底账可读
-                    api_error(self, 403, "只允许读 chapters/ 下的文件或账本")
-                    return
-                txt = read_text(os.path.join(p, rel))
-                if txt is None:
-                    api_error(self, 404, "文件不存在: " + rel)
-                    return
-                api_ok(self, {"file": rel, "content": txt})
-                return
-            if len(segs) == 3 and segs[2] == "files":
-                ch_dir = os.path.join(p, "chapters")
-                out = []
-                if os.path.isdir(ch_dir):
-                    for f in sorted(os.listdir(ch_dir)):
-                        if re.match(r"ch\d+\.(md|json)$", f) or "体检" in f or "审计" in f:
-                            out.append({"file": "chapters/" + f,
-                                        "size": os.path.getsize(os.path.join(ch_dir, f))})
-                api_ok(self, {"files": out})
-                return
-        api_error(self, 404, "no route")
-
-    # ---------------- POST ----------------
-    def handle_api_post(self, segs):
-        if segs == ["settings", "test"]:
-            cfg = live_env()
-            try:
-                answer = llm_chat([
-                    {"role": "system", "content": "ping"},
-                    {"role": "user", "content": "ping"},
-                ], max_tokens=4, action="连通测试")
-                api_ok(self, {"ok": True, "sample": answer, "model": cfg["model"]})
-            except Exception as e:
-                api_error(self, 502, f"连接失败：{e}")
-            return
-
-        if segs == ["chat"]:
-            data = self._read_json()
-            msgs = data.get("messages") or []
-            if not msgs:
-                api_error(self, 400, "messages 不能为空")
-                return
-            if data.get("stream"):
-                self._chat_stream(msgs, float(data.get("temperature") or 0.8))
-                return
-            try:
-                mt = int(data.get("max_tokens") or 2000)  # 建书三件套等长输出需要放宽（曾因 2000 截断丢大纲块）
-                text = llm_chat(msgs, temperature=float(data.get("temperature") or 0.8), max_tokens=mt)
-                api_ok(self, {"ok": True, "content": text})
-            except Exception as e:
-                api_error(self, 502, f"AI 调用失败：{e}")
-            return
-
-        if segs == ["books"]:
-            data = self._read_json()
-            name = (data.get("name") or "").strip()
-            if not name or re.search(r"[/\\]", name):
-                api_error(self, 400, "书名非法（不能含 / 或 \\）")
-                return
-            if os.path.exists(os.path.join(BOOKS_DIR, name)):
-                api_error(self, 400, "同名书已存在")
-                return
-            shutil.copytree(SAMPLE_DIR, os.path.join(BOOKS_DIR, name))
-            ok, _, _ = run_engine([WRITE_CH, "--book", os.path.join(BOOKS_DIR, name), "--init-state"])
-            api_ok(self, {"ok": ok, "name": name})
-            return
-
-        if segs == ["book", "from-chat"]:
-            data = self._read_json()
-            name = (data.get("name") or "").strip()
-            files = data.get("files") or {}
-            if not name or re.search(r"[/\\]", name):
-                api_error(self, 400, "书名非法")
-                return
-            if not all(k in files for k in ("设定", "角色卡", "大纲")):
-                api_error(self, 400, "files 需要包含 设定/角色卡/大纲 三份")
-                return
-            if os.path.exists(os.path.join(BOOKS_DIR, name)):
-                api_error(self, 400, "同名书已存在")
-                return
-            try:
-                shutil.copytree(SAMPLE_DIR, os.path.join(BOOKS_DIR, name))
-                for k in ("设定", "角色卡", "大纲"):
-                    if k not in files:
-                        raise RuntimeError(f"缺少 {k} 文件内容")
-                    write_text(os.path.join(BOOKS_DIR, name, DOC_FILE[k]), files[k])
-                ok, _, _ = run_engine([WRITE_CH, "--book",
-                                       os.path.join(BOOKS_DIR, name), "--init-state"])
-            except Exception as e:
-                api_error(self, 500, f"建书失败：{e}")
-                return
-            api_ok(self, {"ok": ok, "name": name})
-            return
-
-        if segs and segs[0] == "book" and len(segs) == 3:
-            name = segs[1]
-            p = book_path(name)
-            # 导入 txt 建书（按「第X章」自动拆章；导出 txt 的逆操作）
-            if len(segs) == 3 and segs[2] == "import-txt":
-                if re.search(r"[\\/]", name) or name in (".", "..") or name.startswith("_"):
-                    api_error(self, 400, "书名不合法")
-                    return
-                fp = os.path.join(BOOKS_DIR, name)
-                if os.path.exists(fp):
-                    api_error(self, 400, "已存在同名书: " + name)
-                    return
-                data = self._read_json()
-                text = (data.get("text") or "").replace("\r\n", "\n").strip()
-                if len(text) < 50:
-                    api_error(self, 400, "文本太短，无法导入")
-                    return
-                pat = re.compile(r"^\s*(第[0-9一二三四五六七八九十百千零两]+章[^\n]*)$", re.M)
-                marks = [(m.start(), m.group(1).strip()) for m in pat.finditer(text)]
-                chs = []
-                if marks:
-                    for i, (pos, t) in enumerate(marks):
-                        end = marks[i + 1][0] if i + 1 < len(marks) else len(text)
-                        body_i = text[pos:end].strip()
-                        body_i = body_i.split("\n", 1)[1].strip() if "\n" in body_i else ""
-                        chs.append((t, body_i))
-                else:
-                    chs = [("第一章", text)]
-                chs = chs[:500]
-                os.makedirs(os.path.join(fp, "chapters"), exist_ok=True)
-                for i, (t, body_i) in enumerate(chs, 1):
-                    write_text(os.path.join(fp, "chapters", f"ch{i:03d}.md"), f"# {t}\n\n{body_i}\n")
-                write_text(os.path.join(fp, "设定.md"), "# 设定\n\n（导入书——请让 AI 助手根据正文补全设定/角色卡/大纲）\n")
-                write_text(os.path.join(fp, "角色卡.md"), "# 角色卡\n\n（导入书，待补）\n")
-                write_text(os.path.join(fp, "大纲.md"), "# 大纲\n\n（导入书，待补）\n")
-                api_ok(self, {"ok": True, "name": name, "chapters": len(chs)})
-                return
-            if not p:
-                api_error(self, 404, "书不存在: " + name)
-                return
-
-            if not p:
-                api_error(self, 404, "书不存在: " + name)
-                return
-
-            # 写章实时直播（SSE）：逐行推送引擎输出，前端看得见每一步在干嘛
-            if len(segs) == 3 and segs[2] == "write-stream":
-                data = self._read_json()
-                no = int(data.get("no") or 0) or next_chapter_no(p)
-                words = data.get("words")
-                try:
-                    words = max(1000, min(10000, int(words))) if words else None
-                except (TypeError, ValueError):
-                    words = None
-                self.send_response(200)
-                self.send_header("Content-Type", "text/event-stream; charset=utf-8")
-                self.send_header("Cache-Control", "no-cache")
-                self.end_headers()
-
-                def emit(obj):
-                    self.wfile.write(("data: " + json.dumps(obj, ensure_ascii=False) + "\n\n").encode("utf-8"))
-                    self.wfile.flush()
-
-                try:
-                    if not os.path.exists(os.path.join(p, "story_state.md")):
-                        emit({"phase": "run", "line": "【准备】账本不存在，先初始化账本（调用模型，约 1 分钟）…"})
-                        ok0, o0, e0 = run_engine([WRITE_CH, "--book", p, "--init-state"])
-                        for ln in (o0 + e0).splitlines():
-                            if ln.strip():
-                                emit({"phase": "run", "line": ln})
-                    args = [WRITE_CH, "--book", p, "--chapter", str(no)]
-                    if words:
-                        args += ["--words", str(words)]
-                    if data.get("auto_backup"):
-                        args += ["--auto-backup"]
-                    emit({"phase": "run", "line": f"【启动】开始写第 {no} 章（目标 {words or 3000} 字）…"})
-                    proc = subprocess.Popen([sys.executable] + args, stdout=subprocess.PIPE,
-                                            stderr=subprocess.STDOUT, text=True, encoding="utf-8",
-                                            errors="replace", cwd=ROOT)
-                    buf = []
-                    for line in proc.stdout:
-                        line = line.rstrip()
-                        if not line:
-                            continue
-                        buf.append(line)
-                        emit({"phase": "run", "line": line})
-                    proc.wait(timeout=1200)
-                    ok = proc.returncode == 0
-                    log = "\n".join(buf)
-                    body = read_text(os.path.join(p, "chapters", f"ch{no:03d}.md"))
-                    plan_file = os.path.join(p, "chapters", f"ch{no:03d}.章纲.md")
-                    usage = parse_usage("", log)
-                    emit({"phase": "done", "ok": ok, "no": no, "chars": len(body or ""),
-                          "body": body or "", "log": log[-4000:], "words": words,
-                          "plan_used": os.path.exists(plan_file), "usage": usage})
-                except BrokenPipeError:
-                    raise  # 前端断开（如用户关页）；引擎子进程自行跑完
-                except Exception as e:
-                    try:
-                        emit({"phase": "done", "ok": False, "error": f"{type(e).__name__}: {e}"})
-                    except Exception:
-                        pass
-                return
-
-            action = segs[2]
-            data = self._read_json()
-
-            if action == "write":
-                no = int(data.get("no") or 0) or next_chapter_no(p)
-                words = data.get("words")
-                if not os.path.exists(os.path.join(p, "story_state.md")):
-                    sys.stderr.write("  [web] 缺 story_state.md，自动 init-state…\n")
-                    run_engine([WRITE_CH, "--book", p, "--init-state"])
-                engine_args = [WRITE_CH, "--book", p, "--chapter", str(no)]
-                try:
-                    words = max(1000, min(10000, int(words))) if words else None
-                except (TypeError, ValueError):
-                    words = None
-                if words:
-                    engine_args += ["--words", str(words)]
-                if data.get("auto_backup"):
-                    engine_args += ["--auto-backup"]  # R34③ 可选开关
-                plan_file = os.path.join(p, "chapters", f"ch{no:03d}.章纲.md")
-                ok, out, err = run_engine(engine_args)
-                body = read_text(os.path.join(p, "chapters", f"ch{no:03d}.md"))
-                api_ok(self, {"ok": ok, "no": no, "chars": len(body or ""),
-                              "body": body, "log": (out + err)[-2000:],
-                              "words": words, "plan_used": os.path.exists(plan_file),
-                              "usage": parse_usage(out, err)})
-                return
-
-            if action == "plan":
-                # R32 闸口：出章纲（走引擎 --plan，落盘 chapters/chXXX.章纲.md）
-                no = int(data.get("no") or 0) or next_chapter_no(p)
-                words = data.get("words") or 3000
-                ok, out, err = run_engine([WRITE_CH, "--book", p, "--plan",
-                                           "--chapter", str(no), "--words", str(words)], timeout=300)
-                report = read_text(os.path.join(p, "chapters", f"ch{no:03d}.章纲.md"))
-                # R35②：随章纲返回超期伏笔，确认卡顶部红条数据源
-                try:
-                    import write_chapter as _wc
-                    overdue = _wc.overdue_foreshadows(read_text(os.path.join(p, "story_state.md")), no)
-                except Exception:
-                    overdue = []
-                api_ok(self, {"ok": ok, "no": no, "outline": report, "log": (out + err)[-1500:],
-                              "usage": parse_usage(out, err) or _LAST_USAGE, "overdue": overdue})
-                return
-
-            if action == "plan-save":
-                # R32 闸口：保存作者修改后的章纲（覆盖 chXXX.章纲.md）
-                no = int(data.get("no") or 0)
-                text = data.get("text")
-                if no < 1 or text is None:
-                    api_error(self, 400, "需要 no 与 text")
-                    return
-                write_text(os.path.join(p, "chapters", f"ch{no:03d}.章纲.md"), text)
-                api_ok(self, {"ok": True, "no": no})
-                return
-
-            if action == "resize":
-                # R31 字数软控后半：一键加长/精简
-                no = int(data.get("no") or 0)
-                mode = data.get("mode") if data.get("mode") in ("expand", "shrink") else "expand"
-                if data.get("target") is None:
-                    api_error(self, 400, "需要 target（1000–10000 的整数）")
-                    return
-                target = data.get("target")
-                try:
-                    target = max(1000, min(10000, int(target)))
-                except (TypeError, ValueError):
-                    api_error(self, 400, "target 需为 1000–10000 的整数")
-                    return
-                ok, out, err = run_engine([WRITE_CH, "--book", p, "--adjust", "--chapter", str(no),
-                                           "--target", str(target), "--mode", mode], timeout=600)
-                body = read_text(os.path.join(p, "chapters", f"ch{no:03d}.md"))
-                api_ok(self, {"ok": ok, "no": no, "chars": len(body or ""), "log": (out + err)[-1500:],
-                              "usage": parse_usage(out, err)})
-                return
-
-            if action == "backup":
-                # R34 一键备份：全家桶 zip，backups/ 保留最近 10 份
-                ok, out, err = run_engine([BACKUP, "--book", p], timeout=120)
-                m = re.search(r"已生成 → (.+)", out)
-                api_ok(self, {"ok": ok, "path": m.group(1).strip() if m else "", "log": (out + err)[-1000:]})
-                return
-
-            if action == "audit":
-                no = int(data.get("no") or 0)
-                if no < 1:
-                    api_error(self, 400, "需要 no")
-                    return
-                if not os.path.exists(os.path.join(p, "story_state.md")):
-                    sys.stderr.write("  [web] 缺 story_state.md，自动 init-state…\n")
-                    run_engine([WRITE_CH, "--book", p, "--init-state"])
-                ok, out, err = run_engine([WRITE_CH, "--book", p, "--audit", "--chapter", str(no)])
-                report = read_text(os.path.join(p, "chapters", f"ch{no:03d}.一致性审计.md"))
-                api_ok(self, {"ok": ok, "no": no, "report": report, "log": (out + err)[-1500:],
-                              "usage": parse_usage(out, err)})
-                return
-
-            if action == "scan":
-                ok, out, err = run_engine([DEAI, "--scan", p], timeout=120)
-                api_ok(self, {"ok": ok, "report": out + err})
-                return
-
-            if action == "polish":
-                no = int(data.get("no") or 0)
-                if no < 1:
-                    api_error(self, 400, "需要 no")
-                    return
-                ok, out, err = run_engine([DEAI, "--polish", p, "--chapter", str(no)], timeout=300)
-                report = read_text(os.path.join(p, "chapters", f"ch{no:03d}.AI腔体检.md"))
-                api_ok(self, {"ok": ok, "no": no, "report": report, "log": (out + err)[-1500:],
-                              "usage": parse_usage(out, err)})
-                return
-
-            if action == "apply":
-                no = int(data.get("no") or 0)
-                if no < 1:
-                    api_error(self, 400, "需要 no")
-                    return
-                ok, out, err = run_engine([DEAI, "--apply", p, "--chapter", str(no)], timeout=60)
-                api_ok(self, {"ok": ok, "log": (out + err)[-1500:]})
-                return
-
-        api_error(self, 404, "no route")
-
-    # ---------------- PUT ----------------
-    def handle_api_put(self, segs):
-        if segs == ["settings"]:
-            data = self._read_json()
-            changes = data.get("changes") or {}
-            if not isinstance(changes, dict) or not changes:
-                api_error(self, 400, "需要 changes 字段")
-                return
-            write_settings(changes)
-            api_ok(self, {"ok": True, "settings": public_settings(), "key_set": KEY_SET})
-            return
-        if segs and segs[0] == "book" and len(segs) == 3 and segs[2] == "rename":
-            # 书名（文件夹名）重命名：快照/备份等随目录一起走
-            name = segs[1]
-            p = book_path(name)
-            if not p:
-                api_error(self, 404, "书不存在: " + name)
-                return
-            data = json.loads(self.rfile.read(int(self.headers.get("Content-Length") or 0)).decode("utf-8") or "{}")
-            new = (data.get("new") or "").strip()
-            if not new or re.search(r"[\\/]", new) or new in (".", "..") or new.startswith("_"):
-                api_error(self, 400, "新名字不合法（不能含斜杠/下划线开头）")
-                return
-            if os.path.exists(os.path.join(BOOKS_DIR, new)):
-                api_error(self, 400, "已存在同名书: " + new)
-                return
-            os.rename(p, os.path.join(BOOKS_DIR, new))
-            api_ok(self, {"ok": True, "name": new})
-            return
-
-        if segs and segs[0] == "book" and len(segs) == 4:
-            name = segs[1]
-            p = book_path(name)
-            if not p:
-                api_error(self, 404, "书不存在: " + name)
-                return
-            raw = self.rfile.read(int(self.headers.get("Content-Length") or 0)).decode("utf-8")
-            if segs[2] == "doc":
-                doc = segs[3]
-                if doc not in DOCS:
-                    api_error(self, 404, "doc 必须是 " + "|".join(DOCS))
-                    return
-                write_text(os.path.join(p, DOC_FILE[doc]), raw)
-                api_ok(self, {"ok": True})
-                return
-            if segs[2] == "ch":
-                if not re.fullmatch(r"(\d+)", segs[3]):
-                    api_error(self, 400, "章号格式错误")
-                    return
-                no = int(segs[3])
-                os.makedirs(os.path.join(p, "chapters"), exist_ok=True)
-                write_text(os.path.join(p, "chapters", f"ch{no:03d}.md"), raw)
-                api_ok(self, {"ok": True, "no": no})
-                return
-        api_error(self, 404, "no route")
-
-    # ---------------- SSE 流式对话 ----------------
-    def _chat_stream(self, msgs, temperature):
-        """SSE 流式输出：event: delta / data: "文字块"，逐 token 推给前端。"""
-        cfg = live_env()
-        if not cfg["key"]:
-            self.send_response(401)
-            self.send_header("Content-Type", "application/json")
-            self.end_headers()
-            self.wfile.write(json.dumps({"error": "未配置 AGNES_API_KEY"}).encode("utf-8"))
-            return
-        import urllib.request as _ur
-        payload = {
-            "model": cfg["model"],
-            "messages": msgs,
-            "temperature": temperature,
-            "max_tokens": 2000,
-            "stream": True,
-            "reasoning_effort": "low",
-        }
-        req = _ur.Request(cfg["base_url"].rstrip("/") + "/chat/completions",
-                          data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
-                          headers={"Content-Type": "application/json",
-                                   "Authorization": "Bearer " + cfg["key"]},
-                          method="POST")
-        try:
-            resp = _ur.urlopen(req, timeout=240)
-        except Exception as e:
-            self.send_response(502)
-            self.send_header("Content-Type", "application/json")
-            self.end_headers()
-            self.wfile.write(json.dumps({"error": f"上游失败：{e}"}).encode("utf-8"))
-            return
-        self.send_response(200)
-        self.send_header("Content-Type", "text/event-stream; charset=utf-8")
-        self.send_header("Cache-Control", "no-cache")
-        self.send_header("X-Accel-Buffering", "no")
-        self.end_headers()
-        try:
-            buf = b""
-            while True:
-                chunk = resp.read1(4096) if hasattr(resp, "read1") else resp.read(4096)
-                if not chunk:
-                    break
-                buf += chunk
-                while b"\n" in buf:
-                    line, buf = buf.split(b"\n", 1)
-                    line = line.decode("utf-8", errors="replace").rstrip()
-                    if not line.startswith("data: "):
-                        continue
-                    payload = line[6:]
-                    if payload == "[DONE]":
-                        self.wfile.write(b"event: done\ndata: {}\n\n")
-                        self.wfile.flush()
-                        break
-                    try:
-                        obj = json.loads(payload)
-                        delta = (((obj.get("choices") or [{}])[0]).get("delta") or {}).get("content", "")
-                        if delta:
-                            self.wfile.write(
-                                b"event: delta\ndata: " +
-                                json.dumps(delta, ensure_ascii=False).encode("utf-8") + b"\n\n")
-                            self.wfile.flush()
-                    except Exception:
-                        pass
-        except Exception as e:
-            try:
-                self.wfile.write(b"event: error\ndata: " +
-                                 json.dumps(str(e), ensure_ascii=False).encode("utf-8") + b"\n\n")
-                self.wfile.flush()
-            except Exception:
-                pass
-        finally:
-            try:
-                resp.close()
-            except Exception:
-                pass
+    api_error(h, 404, "no route")
 
 
 def main():
@@ -946,6 +434,7 @@ def main():
     ap = argparse.ArgumentParser(description="novel-ledger Web 工作台")
     ap.add_argument("--port", type=int, default=PORT)
     args = ap.parse_args()
+    api_tasks.recover_stale_tasks()  # 启动恢复：清掉崩溃残留的 running 任务（改 paused），防书被永久锁死
     srv = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
     print("novel-ledger Web 工作台已启动")
     print(f"  浏览器打开 → http://127.0.0.1:{args.port}")

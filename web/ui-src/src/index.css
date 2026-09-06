@@ -1,35 +1,152 @@
 @import "tailwindcss";
 
-/* 设计 token —— 对标 AI-Novel-Writing-Assistant 观感：
-   深藏青主色 + 冷灰中性色 + 绿/蓝状态徽章 + 白卡片浅灰底 */
-@theme {
-  --color-paper: #f5f6f8;
-  --color-panel: #ffffff;
-  --color-line: #e5e7eb;
-  --color-ink: #171923;
-  --color-inksoft: #70757f;
-  --color-brand: #171923;   /* 主色=深藏青：主按钮/强调（对齐竞品） */
-  --color-brand2: #2b303c;  /* 主色 hover */
-  --color-brandbg: #eef0f4; /* 激活底/提示条 */
-  --color-accent: #d97a46;  /* 品牌点缀：logo 圆点、少量高亮 */
-  --color-ok: #16a34a;
-  --color-okbg: #e9f7ee;
-  --color-warn: #b45309;
-  --color-warnbg: #fdf3e3;
-  --color-err: #dc2626;
-  --color-errbg: #fdeaea;
-  --color-topbar: #14161c;  /* 顶栏深藏青 */
+/* 设计 token —— 三主题（CSS 变量驱动）
+   语义令牌经 @theme inline 指向 --nl-* 变量；配色在 :root / [data-theme] 下切换，
+   禁止在 [data-theme] 里硬编码补丁式覆盖具体工具类。 */
+
+@theme inline {
+  --color-paper: var(--nl-paper);
+  --color-panel: var(--nl-panel);
+  --color-line: var(--nl-line);
+  --color-ink: var(--nl-ink);
+  --color-inksoft: var(--nl-inksoft);
+  --color-brand: var(--nl-brand);
+  --color-brand2: var(--nl-brand2);
+  --color-brandbg: var(--nl-brandbg);
+  --color-accent: var(--nl-accent);
+  --color-ok: var(--nl-ok);
+  --color-okbg: var(--nl-okbg);
+  --color-warn: var(--nl-warn);
+  --color-warnbg: var(--nl-warnbg);
+  --color-err: var(--nl-err);
+  --color-errbg: var(--nl-errbg);
+  --color-topbar: var(--nl-topbar);
+  --color-topbarfg: var(--nl-topbarfg);
+  /* 新增三组语义色 */
+  --color-success: var(--nl-success);
+  --color-warning: var(--nl-warning);
+  --color-info: var(--nl-info);
   --radius-card: 12px;
+  /* 三档阴影（随主题切换深浅） */
+  --shadow-sm: var(--nl-shadow-sm);
+  --shadow-md: var(--nl-shadow-md);
+  --shadow-lg: var(--nl-shadow-lg);
+}
+
+/* 冷色（默认观感，对齐 AI-Novel-Writing-Assistant：深藏青主色 + 冷灰中性 + 白卡片浅灰底） */
+:root {
+  --nl-paper: #f5f6f8;
+  --nl-panel: #ffffff;
+  --nl-line: #e5e7eb;
+  --nl-ink: #171923;
+  --nl-inksoft: #70757f;
+  --nl-brand: #171923;
+  --nl-brand2: #2b303c;
+  --nl-brandbg: #eef0f4;
+  --nl-accent: #d97a46;
+  --nl-ok: #16a34a;
+  --nl-okbg: #e9f7ee;
+  --nl-warn: #b45309;
+  --nl-warnbg: #fdf3e3;
+  --nl-err: #dc2626;
+  --nl-errbg: #fdeaea;
+  --nl-topbar: #14161c;
+  --nl-topbarfg: #d5d9e0;
+  --nl-success: #16a34a;
+  --nl-warning: #b45309;
+  --nl-info: #2563eb;
+  --nl-shadow-sm: 0 1px 2px rgba(20, 22, 28, 0.06);
+  --nl-shadow-md: 0 6px 16px rgba(20, 22, 28, 0.10);
+  --nl-shadow-lg: 0 16px 40px rgba(20, 22, 28, 0.16);
+}
+
+/* 暖纸（paper）：米黄纸感 + 暖棕主色 */
+[data-theme="paper"] {
+  --nl-paper: #f7f2e9;
+  --nl-panel: #fffdf8;
+  --nl-line: #e8dcc6;
+  --nl-ink: #2c2117;
+  --nl-inksoft: #897a62;
+  --nl-brand: #8a4b2b;
+  --nl-brand2: #a35c36;
+  --nl-brandbg: #f3e9d6;
+  --nl-accent: #c8772f;
+  --nl-ok: #4d7c0f;
+  --nl-okbg: #eef5e0;
+  --nl-warn: #9a5b00;
+  --nl-warnbg: #fbeed6;
+  --nl-err: #c0392b;
+  --nl-errbg: #fbe9e7;
+  --nl-topbar: #3a2c1c;
+  --nl-topbarfg: #efe6d6;
+  --nl-success: #4d7c0f;
+  --nl-warning: #9a5b00;
+  --nl-info: #2563eb;
+  --nl-shadow-sm: 0 1px 2px rgba(90, 64, 28, 0.08);
+  --nl-shadow-md: 0 6px 16px rgba(90, 64, 28, 0.12);
+  --nl-shadow-lg: 0 16px 40px rgba(90, 64, 28, 0.18);
+}
+
+/* 暗色（dark）：近黑底 + 浅字 + 蓝调主色（保证白字按钮可读） */
+[data-theme="dark"] {
+  --nl-paper: #0f1115;
+  --nl-panel: #171a21;
+  --nl-line: #2a2f3a;
+  --nl-ink: #e6e8ee;
+  --nl-inksoft: #9aa3b2;
+  --nl-brand: #5b82c7;
+  --nl-brand2: #7aa0d8;
+  --nl-brandbg: #232a38;
+  --nl-accent: #e0915a;
+  --nl-ok: #4ade80;
+  --nl-okbg: #16331f;
+  --nl-warn: #f0b35a;
+  --nl-warnbg: #332a17;
+  --nl-err: #f87171;
+  --nl-errbg: #351c1c;
+  --nl-topbar: #0b0d11;
+  --nl-topbarfg: #c7cdd8;
+  --nl-success: #4ade80;
+  --nl-warning: #f0b35a;
+  --nl-info: #60a5fa;
+  --nl-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.45);
+  --nl-shadow-md: 0 6px 16px rgba(0, 0, 0, 0.55);
+  --nl-shadow-lg: 0 16px 40px rgba(0, 0, 0, 0.65);
 }
 
 body {
   @apply bg-paper text-ink antialiased;
   font-family: "Segoe UI", "Microsoft YaHei", "PingFang SC", system-ui, sans-serif;
   font-size: 14px;
+  transition: background-color 200ms ease, color 200ms ease;
 }
 
-/* 细滚动条（工作台观感） */
+/* 细滚动条（工作台观感，随主题） */
 ::-webkit-scrollbar { width: 8px; height: 8px; }
-::-webkit-scrollbar-thumb { background: #d3d7de; border-radius: 4px; }
-::-webkit-scrollbar-thumb:hover { background: #b9bec7; }
+::-webkit-scrollbar-thumb { background: var(--nl-line); border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: var(--nl-inksoft); }
 ::-webkit-scrollbar-track { background: transparent; }
+* { scrollbar-width: thin; scrollbar-color: var(--nl-line) transparent; }
+
+/* UI 质感升级（克制，复用语义类） */
+@layer components {
+  .card { @apply rounded-xl border border-line bg-panel shadow-sm; }
+  .card-hover { @apply transition hover:-translate-y-px hover:shadow-md; }
+  .btn-primary { @apply rounded-lg bg-brand px-3.5 py-2 text-[13px] font-medium text-white transition active:scale-[0.98] hover:bg-brand2; }
+  .btn-ghost { @apply rounded-lg border border-line px-3 py-2 text-[13px] text-ink transition hover:border-brand2 hover:text-brand active:scale-[0.98]; }
+}
+
+/* 顶栏渐变底（brand → brand2，135deg）+ 细边，随主题 */
+.topbar-grad {
+  background-image: linear-gradient(135deg, var(--nl-brand), var(--nl-brand2));
+  border-bottom: 1px solid color-mix(in srgb, var(--nl-topbarfg) 18%, transparent);
+}
+
+/* 页面切换淡入 */
+@keyframes nl-fadein { from { opacity: 0; transform: translateY(2px); } to { opacity: 1; transform: none; } }
+.page-fade { animation: nl-fadein 120ms ease-out; }
+
+/* 主按钮渐变（克制，仅 hover 时显，避免破坏语义主色） */
+.btn-grad {
+  background-image: linear-gradient(135deg, var(--nl-brand), var(--nl-brand2));
+}

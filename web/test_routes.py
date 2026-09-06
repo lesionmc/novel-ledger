@@ -14,14 +14,21 @@ server.py 曾因缩进问题让 POST 路由全部不可达而无人发现。本�
   6. GET /api/book/<雾城档案>/ch/1 能读到第一章正文
   7. POST 到不存在的书 → 404（验证 POST 路由可达而非静默 404 no route / 500）
   8. PUT 到不存在的书 → 404（同上，PUT 分支可达）
+  9. v0.8/v0.9 新增 13 路由（文风/图谱/向量/样章/隐私 + 重算/跨章/平台/试读/证据链）：
+     不存在书→404、真实书语义（200/404/502）、文件白名单扩展、stub 引擎下 200+ok
 
 运行：python web/test_routes.py
-任何 ❌ 都以非零码退出。只读验证：全部请求不写任何项目数据。
+任何 ❌ 都以非零码退出。
+注意：§9 建书、§12.3 任务系统会创建并删除临时测试书（测试_断言_建书 / 测试_任务书），
+测试结束均清理；不触碰任何真实书籍数据。实际断言数见结尾输出行。
 """
 import json
 import os
+import shutil
 import sys
+import tempfile
 import threading
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -133,6 +140,321 @@ try:
     if ok_created:
         _sh.rmtree(os.path.join(S.BOOKS_DIR, "测试_断言_建书"), ignore_errors=True)
         check("测试书已清理", not os.path.isdir(os.path.join(S.BOOKS_DIR, "测试_断言_建书")))
+
+    # 10.x 模板端点穿越防护 + /api/tasks + 流式/设置静态断言（2026-09-05 安全重建）
+    # 10.1 valid_tpl_name 单元断言（模板 read/copy 端点共用）
+    check("valid_tpl_name 拒绝 ../ 穿越", S.valid_tpl_name("../evil") is False)
+    check("valid_tpl_name 拒绝反斜杠穿越", S.valid_tpl_name("..\\evil") is False)
+    check("valid_tpl_name 拒绝 _ 前缀", S.valid_tpl_name("_tpl") is False)
+    check("valid_tpl_name 放行正常名", S.valid_tpl_name("正常模板名") is True)
+
+    # 10.2 模板端点穿越 4 例全 404（..%2F、反斜杠编码；read 与 copy 各两例）
+    def req_raw(method, raw_path, body=None):
+        # 不做二次编码：直接发原始路径（含 %2F/%5C 等穿越载荷）
+        url = "http://127.0.0.1:%d%s" % (PORT, raw_path)
+        data = json.dumps(body, ensure_ascii=False).encode("utf-8") if body is not None else None
+        r = urllib.request.Request(url, data=data, method=method,
+                                   headers={"Content-Type": "application/json; charset=utf-8"} if data else {})
+        try:
+            with urllib.request.urlopen(r, timeout=30) as resp:
+                return resp.status, resp.read().decode("utf-8")
+        except urllib.error.HTTPError as e:
+            return e.code, e.read().decode("utf-8")
+
+    code, _ = req_raw("GET", "/api/tpl/..%2F..%2F.env")
+    check("模板 read ..%2F 穿越 → 404", code == 404, str(code))
+    code, _ = req_raw("GET", "/api/tpl/..%5C..%5C.env")
+    check("模板 read 反斜杠编码穿越 → 404", code == 404, str(code))
+    books_before = set(json.loads(req("GET", "/api/books")[2]).get("books", []))
+    code, _ = req_raw("POST", "/api/tpl/..%2F..%2Fsample_book/copy", {"name": "穿越测试书"})
+    check("模板 copy ..%2F 穿越 → 404", code == 404, str(code))
+    code, _ = req_raw("POST", "/api/tpl/..%5C..%5Cevil/copy", {"name": "穿越测试书"})
+    check("模板 copy 反斜杠编码穿越 → 404", code == 404, str(code))
+    books_after = set(json.loads(req("GET", "/api/books")[2]).get("books", []))
+    check("模板穿越未建出书（books 目录未新增、未越界落盘）",
+          books_after == books_before
+          and not os.path.isdir(os.path.join(os.path.dirname(S.BOOKS_DIR), "穿越测试书"))
+          and not os.path.exists(os.path.join(S.BOOKS_DIR, "..env")),
+          str(sorted(books_after ^ books_before)))
+
+    # 10.3 GET /api/tasks：200 且 tasks 为 list（并验证 _/. 前缀目录被过滤）
+    code, _, body = req("GET", "/api/tasks")
+    tasks = json.loads(body).get("tasks") if code == 200 else None
+    check("GET /api/tasks 200", code == 200, f"{code} {body[:80]}")
+    check("/api/tasks 返回 tasks 为 list", isinstance(tasks, list), str(type(tasks)))
+
+    # 10.4 CSRF 同源防护（_same_origin_guard）行为断言：伪造 Origin 拒、同源/无 Origin 放行
+    def req_origin(method, path, body, origin=None):
+        url = "http://127.0.0.1:%d%s" % (PORT, urllib.parse.quote(path, safe="/"))
+        data = json.dumps(body, ensure_ascii=False).encode("utf-8") if body is not None else None
+        headers = {"Content-Type": "application/json; charset=utf-8"} if data else {}
+        if origin:
+            headers["Origin"] = origin
+        r = urllib.request.Request(url, data=data, method=method, headers=headers)
+        try:
+            with urllib.request.urlopen(r, timeout=30) as resp:
+                return resp.status, resp.read().decode("utf-8")
+        except urllib.error.HTTPError as e:
+            return e.code, e.read().decode("utf-8")
+
+    code, _ = req_origin("POST", "/api/chat", {}, origin="http://evil.example.com")
+    check("伪造跨站 Origin POST → 403（CSRF 拦截）", code == 403, str(code))
+    code, _ = req_origin("POST", "/api/chat", {},
+                         origin="http://127.0.0.1:%d" % PORT)
+    check("同源 Origin POST 放行（到达业务校验 400）", code == 400, str(code))
+    code, _ = req_origin("POST", "/api/chat", {})
+    check("无 Origin POST 放行（curl/脚本场景）", code == 400, str(code))
+
+    # 10.5 write_settings 原子写行为断言（打临时 .env 路径，不碰真实配置）
+    _tmp_env_dir = tempfile.mkdtemp(prefix="nl_env_")
+    _tmp_env = os.path.join(_tmp_env_dir, ".env")
+    _real_env, _real_keyset = S.ENV_PATH, S.KEY_SET
+    try:
+        with open(_tmp_env, "w", encoding="utf-8") as f:
+            f.write("AGNES_API_KEY=sk-test-old-12345\n# AGNES_MODEL=\n")
+        S.ENV_PATH = _tmp_env
+        S.write_settings({"AGNES_MODEL": "m-test"})
+        txt = open(_tmp_env, encoding="utf-8").read()
+        check("write_settings 白名单键写入且保留其余行",
+              "AGNES_MODEL=m-test" in txt and "AGNES_API_KEY=sk-test-old-12345" in txt, txt[:80])
+        check("write_settings 原子写无 .tmp 残留（os.replace）",
+              not os.path.exists(_tmp_env + ".tmp"))
+        S.write_settings({"AGNES_API_KEY": "****"})
+        txt2 = open(_tmp_env, encoding="utf-8").read()
+        check("write_settings 脱敏占位符 **** 不写回（不覆盖真实 key）",
+              "sk-test-old-12345" in txt2, txt2[:80])
+    finally:
+        S.ENV_PATH, S.KEY_SET = _real_env, _real_keyset
+        shutil.rmtree(_tmp_env_dir, ignore_errors=True)
+
+    # 10.6 其他安全修复防回归：兜底 500 脱敏 + 用量锁
+    check("_LAST_USAGE 有锁保护（ThreadingHTTPServer 并发防串话）",
+          isinstance(getattr(S, "_USAGE_LOCK", None), type(threading.Lock())))
+
+    # 11. v0.8/v0.9 新增 13 路由：可达性 + 业务语义（2026-09-06）
+    BK = "雾城档案"
+    NOBOOK = "no_such_book_abc"
+
+    # 11.1 不存在的书 → 业务 404（13 条路由全覆盖，验证路由可达而非 no route/500）
+    v089 = [("GET", "/style", None), ("GET", "/graph", None), ("GET", "/vector", None),
+            ("GET", "/sample-chapters", None),
+            ("POST", "/style-learn", {}), ("POST", "/graph", {}), ("POST", "/vector-index", {}),
+            ("POST", "/privacy-scan", {}),
+            ("POST", "/recalc-from", {"no": 1}), ("POST", "/cross-audit", {"no": 1}),
+            ("POST", "/platform-check", {"no": 1}), ("POST", "/beta-reader", {"no": 1}),
+            ("POST", "/export-evidence", {"no": 1})]
+    for method, tail, body in v089:
+        code, _, resp = req(method, f"/api/book/{NOBOOK}{tail}", body)
+        check(f"{method} /api/book/<不存在>/{tail.strip('/')} → 404",
+              code == 404 and "不存在" in resp, f"{code} {resp[:60]}")
+
+    # 11.2 GET 读文件类路由：真实书语义（文件在→200 带内容；不在→404 带友好引导）
+    code, _, resp = req("GET", f"/api/book/{BK}/style")
+    d = json.loads(resp) if code in (200, 404) else {}
+    check("GET /style 真书 200/404 语义正确",
+          (code == 200 and "content" in d) or (code == 404 and "文风指纹" in resp),
+          f"{code} {resp[:80]}")
+    code, _, resp = req("GET", f"/api/book/{BK}/graph")
+    d = json.loads(resp) if code in (200, 404) else {}
+    check("GET /graph 真书 200/404 语义正确",
+          (code == 200 and ("json" in d or "md" in d)) or (code == 404 and "关系图谱" in resp),
+          f"{code} {resp[:80]}")
+
+    # 11.3 vector 状态：200 且 available 为 bool（未装 chromadb → available:false，绝不 500）
+    code, _, resp = req("GET", f"/api/book/{BK}/vector")
+    d = json.loads(resp) if code == 200 else {}
+    check("GET /vector 200 且 available 为 bool",
+          code == 200 and isinstance(d.get("available"), bool), f"{code} {resp[:80]}")
+
+    # 11.4 文件白名单扩展：书根三产物放行（在→200 / 不在→404，绝不能 403）；白名单外仍 403
+    for rel in ("文风指纹.md", "关系图谱.json", "关系图谱.md"):
+        code, _, _ = req("GET", f"/api/book/{BK}/file/{rel}")
+        check(f"file 白名单放行书根产物 {rel}（非 403）", code in (200, 404), str(code))
+    code, _, _ = req("GET", f"/api/book/{BK}/file/机密.txt")
+    check("file 对照：白名单外仍 403", code == 403, str(code))
+
+    # 11.5 长任务路由（stub 引擎）：patch run_engine 与脚本常量 → 零外呼、零模型消耗、毫秒级
+    _real_run = S.run_engine
+    _real_scripts = (S.STYLE_LEARN, S.REL_GRAPH, S.VECTOR)
+    _stub_script = os.path.join(S.SCRIPTS_DIR, "usage_log.py")   # 项目内一定存在的真实文件
+    _bogus_script = os.path.join(S.SCRIPTS_DIR, "__no_such_engine__.py")
+    try:
+        S.run_engine = lambda args, timeout=900: (True, "[stub] 引擎输出", "")
+        S.STYLE_LEARN = S.REL_GRAPH = S.VECTOR = _stub_script
+        code, _, resp = req("GET", f"/api/book/{BK}/sample-chapters")
+        check("GET /sample-chapters（stub 引擎）200 且 ok",
+              code == 200 and json.loads(resp).get("ok") is True, f"{code} {resp[:60]}")
+        for tail, body in [("/style-learn", {}), ("/graph", {}), ("/vector-index", {}),
+                           ("/privacy-scan", {}),
+                           ("/recalc-from", {"no": 1}), ("/cross-audit", {"no": 1}),
+                           ("/platform-check", {"no": 1}), ("/beta-reader", {"no": 1}),
+                           ("/export-evidence", {"no": 1})]:
+            code, _, resp = req("POST", f"/api/book/{BK}{tail}", body)
+            d = json.loads(resp) if code == 200 else {}
+            check(f"POST {tail}（stub 引擎）200 且 ok=true",
+                  code == 200 and d.get("ok") is True, f"{code} {resp[:60]}")
+        # 引擎脚本未就位 → 502（明确的业务降级语义，而非 500/no route）
+        S.STYLE_LEARN = _bogus_script
+        code, _, resp = req("POST", f"/api/book/{BK}/style-learn", {})
+        check("引擎脚本未就位 → 502（业务降级语义）", code == 502 and "未就位" in resp,
+              f"{code} {resp[:60]}")
+    finally:
+        S.run_engine = _real_run
+        S.STYLE_LEARN, S.REL_GRAPH, S.VECTOR = _real_scripts
+
+    # 12. v0.5/v0.6 补齐路由：体检/修复/拆书/连写任务/提示词/模板（stub 引擎，零 token）
+    # 12.1 不存在的书 → 业务 404（新路由全可达，404 先于任何引擎调用，零消耗）
+    for method, tail, body in [
+        ("POST", "/evaluate", {"no": 1}), ("POST", "/publish-check", {"no": 1}),
+        ("POST", "/checkup", {"no": 1}), ("POST", "/checkup", {"no": 1, "full": True}),
+        ("POST", "/fix", {"no": 1}), ("POST", "/deconstruct", {}),
+        ("GET", "/task", None),
+        ("POST", "/task/start", {"count": 2}),
+        ("POST", "/task/control", {"id": "x", "action": "cancel"}),
+    ]:
+        code, _, resp = req(method, f"/api/book/{NOBOOK}{tail}", body)
+        check(f"{method} /api/book/<不存在>/{tail.strip('/')} → 404",
+              code == 404 and "不存在" in resp, f"{code} {resp[:60]}")
+
+    # 12.2 真书 + stub run_engine → 200 且 ok（evaluate/publish-check/checkup/fix/deconstruct）
+    _real_run12 = S.run_engine
+    _captured = []
+
+    def _stub_run12(args, timeout=900):
+        _captured.append(args)
+        return (True, "[stub] 体检输出", "")
+
+    try:
+        S.run_engine = _stub_run12
+        for tail, body in [("/evaluate", {"no": 1}), ("/publish-check", {"no": 1}),
+                           ("/checkup", {"no": 1}), ("/checkup", {"no": 1, "full": True}),
+                           ("/fix", {"no": 1}), ("/deconstruct", {})]:
+            code, _, resp = req("POST", f"/api/book/{BK}{tail}", body)
+            d = json.loads(resp) if code == 200 else {}
+            check(f"POST {tail}（stub 引擎）200 且 ok=true",
+                  code == 200 and d.get("ok") is True, f"{code} {resp[:60]}")
+        # evaluate 必须走 checkup.py --evaluate（零 token 通道，防 flag 拼错测试发现不了）
+        check("evaluate 传入命令含 checkup.py 与 --evaluate（且非 --full）",
+              any(os.path.basename(a[0]) == "checkup.py" and "--evaluate" in a and "--full" not in a
+                  for a in _captured), str(_captured)[:160])
+        # 参数校验：no 非法 → 400 且不触引擎（零消耗）
+        for tail, bad in [("/evaluate", {"no": "abc"}), ("/evaluate", {"no": -3}),
+                          ("/publish-check", {"no": 0}), ("/checkup", {"no": "x"}),
+                          ("/fix", {"no": None}), ("/write", {"no": -5}),
+                          ("/plan", {"no": 1, "words": 20000}),
+                          ("/plan", {"no": 1, "words": "abc"})]:
+            code, _, resp = req("POST", f"/api/book/{BK}{tail}", bad)
+            check(f"POST {tail} 非法参数 {json.dumps(bad, ensure_ascii=False)} → 400",
+                  code == 400, f"{code} {resp[:60]}")
+    finally:
+        S.run_engine = _real_run12
+
+    # 12.3 连写任务三端点（临时书 + stub run_engine，毫秒级完成，零 token）
+    import shutil as _sh2
+    _tb_name = "测试_任务书"
+    _tb = os.path.join(S.BOOKS_DIR, _tb_name)
+    _sh2.rmtree(_tb, ignore_errors=True)
+    os.makedirs(os.path.join(_tb, "chapters"))
+    try:
+        code, _, resp = req("GET", f"/api/book/{_tb_name}/task")
+        check("GET /task 无任务 → task 为 null",
+              code == 200 and json.loads(resp).get("task") is None, f"{code} {resp[:60]}")
+        code, _, resp = req("POST", f"/api/book/{_tb_name}/task/start", {"count": 11})
+        check("task/start count=11 未确认 → 400 带 token 预估(55000)",
+              code == 400 and "55000" in resp, f"{code} {resp[:80]}")
+        code, _, resp = req("POST", f"/api/book/{_tb_name}/task/start",
+                            {"count": 31, "confirmed": True})
+        check("task/start count=31 → 400（单任务上限 30 章）",
+              code == 400 and "30" in resp, f"{code} {resp[:80]}")
+        S.run_engine = lambda args, timeout=900: (True, "[stub] 假章写完", "")
+        try:
+            code, _, resp = req("POST", f"/api/book/{_tb_name}/task/start",
+                                {"start": 3, "count": 2, "confirmed": True})
+            d = json.loads(resp) if code == 200 else {}
+            tid = (d.get("task") or {}).get("id")
+            check("task/start count=2 → 200 且带 task.id",
+                  code == 200 and bool(tid), f"{code} {resp[:80]}")
+            status, task = None, None
+            for _ in range(50):
+                code, _, resp = req("GET", f"/api/book/{_tb_name}/task")
+                task = json.loads(resp).get("task")
+                status = (task or {}).get("status")
+                if status != "running":
+                    break
+                time.sleep(0.05)
+            check("任务跑完 status=done 且 done 记录两章",
+                  status == "done" and len((task or {}).get("done") or []) == 2, str(task)[:120])
+            code, _, resp = req("POST", f"/api/book/{_tb_name}/task/control",
+                                {"id": tid, "action": "nope"})
+            check("task/control 非法 action → 400", code == 400, f"{code} {resp[:60]}")
+            code, _, resp = req("POST", f"/api/book/{_tb_name}/task/control",
+                                {"id": "task-nope", "action": "cancel"})
+            check("task/control 未知 id → 404", code == 404, f"{code} {resp[:60]}")
+            code, _, resp = req("POST", f"/api/book/{_tb_name}/task/control",
+                                {"id": tid, "action": "cancel"})
+            check("task/control cancel 已结束任务 → 200",
+                  code == 200 and json.loads(resp).get("ok") is True, f"{code} {resp[:60]}")
+        finally:
+            S.run_engine = _real_run12
+    finally:
+        _sh2.rmtree(_tb, ignore_errors=True)
+
+    # 12.4 提示词管理三端点（GET 列表/default 用真实 rules/；PUT 往返用临时目录，不动真实规则）
+    code, _, resp = req("GET", "/api/rules")
+    rules = json.loads(resp).get("rules") if code == 200 else None
+    check("GET /api/rules 200 且含 system.md",
+          code == 200 and isinstance(rules, list) and "system.md" in rules, str(rules)[:80])
+    code, _, resp = req("GET", "/api/rules/deai_rules.md/default")
+    d = json.loads(resp) if code == 200 else {}
+    check("rules default 返回内置默认 >50 字",
+          code == 200 and len(d.get("body") or "") > 50, f"{code} {resp[:60]}")
+    code, _ = req_raw("GET", "/api/rules/..%2F.env/default")
+    check("rules default ..%2F 穿越 → 404", code == 404, str(code))
+    code, _ = req_raw("GET", "/api/rules/no_such_rule.md/default")
+    check("rules default 坏名 → 404", code == 404, str(code))
+    import tempfile
+    _tmp_rules = tempfile.mkdtemp(prefix="nl_rules_")
+    with open(os.path.join(_tmp_rules, "my_rule.md"), "w", encoding="utf-8") as f:
+        f.write("v1 旧内容")
+    _real_rules = S.RULES_DIR
+    try:
+        S.RULES_DIR = _tmp_rules
+        code, _, resp = req("PUT", "/api/rules/my_rule.md", {"body": "v2 新内容"})
+        d = json.loads(resp) if code == 200 else {}
+        new_txt = open(os.path.join(_tmp_rules, "my_rule.md"), encoding="utf-8").read()
+        bak_txt = open(os.path.join(_tmp_rules, "my_rule.md.bak"), encoding="utf-8").read()
+        check("PUT /api/rules 往返：内容更新且旧内容备份 .bak",
+              code == 200 and d.get("ok") is True and new_txt == "v2 新内容"
+              and bak_txt == "v1 旧内容", f"{code} {resp[:60]}")
+        code, _, resp = req("GET", "/api/rules")
+        check("GET /api/rules（临时目录）含 my_rule.md",
+              "my_rule.md" in (json.loads(resp).get("rules") or []), resp[:60])
+        code, _, _ = req("PUT", "/api/rules/no_such_rule.md", {"body": "x"})
+        check("PUT rules 白名单外坏名 → 404", code == 404, str(code))
+    finally:
+        S.RULES_DIR = _real_rules
+        _sh2.rmtree(_tmp_rules, ignore_errors=True)
+
+    # 12.5 GET /api/templates：题材模板结构 + 模式卡
+    code, _, resp = req("GET", "/api/templates")
+    d = json.loads(resp) if code == 200 else {}
+    tpls = {t.get("name"): t for t in d.get("templates") or []}
+    check("templates 200 且含三套题材模板",
+          code == 200 and {"悬疑推理", "都市异闻", "武侠江湖"} <= set(tpls), str(list(tpls)))
+    check("每套模板 docs 三件套（设定/角色卡/大纲）齐全",
+          all(all((t.get("docs") or {}).get(k) for k in ("设定", "角色卡", "大纲"))
+              for t in tpls.values()), str({k: v.get("docs") for k, v in tpls.items()}))
+    check("模式卡含闸口逐章与连写冲刺",
+          {"闸口逐章", "连写冲刺"} <= set(d.get("mode_cards") or []), str(d.get("mode_cards")))
+
+    # 12.6 插件清单与开关（v0.3 技能中心 API）
+    code, _, resp = req("GET", "/api/plugins")
+    d = json.loads(resp) if code == 200 else {}
+    plugs = {p.get("name"): p for p in d.get("plugins") or []}
+    check("plugins 200 且含首批三插件",
+          code == 200 and {"evaluate", "publish-check", "audit-full"} <= set(plugs), str(list(plugs)))
+    code, _, resp = req("POST", "/api/plugins/no_such_plugin/toggle", {"enabled": False})
+    check("toggle 坏插件名 → 404", code == 404, f"{code} {resp[:60]}")
 
 finally:
     srv.shutdown()

@@ -1,0 +1,6 @@
+{
+  "name": "audit-full",
+  "version": "1.0",
+  "description": "全书一致性审计：人物/逻辑/衔接/连贯四维，蒸馏自 novel-consistency-audit",
+  "enabled": true
+}

@@ -1,0 +1,32 @@
+# novel-ledger 测试工作流：零第三方依赖，无需装包
+# 三条独立验收：引擎冒烟 / Web 路由 38 断言 / MCP 自测
+name: tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    env:
+      PYTHONUTF8: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: 引擎冒烟（scripts/smoke_test.py）
+        run: python scripts/smoke_test.py
+
+      - name: Web 路由验收（web/test_routes.py）
+        run: python web/test_routes.py
+
+      - name: MCP 自测（mcp_server/server.py --selftest）
+        run: python mcp_server/server.py --selftest

@@ -92,7 +92,7 @@ export default function NewWizard({ go }) {
     try {
       if (!brief) await genBrief();
       const sys = { role: "system", content: "你是中文网文资深编辑。根据对话 + 简报，直接输出 3 个 markdown 文件内容：\n1) 设定.md（世界观/类型/一句话卖点/硬规则）\n2) 角色卡.md（主角 + 主要对手 + 关键配角，含身份/性格/称呼）\n3) 大纲.md（全书主线 + 第一卷 3-5 章细纲，每章目标/事件/钩子）\n严格用三个 markdown 块，块首分别用 `=== 设定.md ===`、`=== 角色卡.md ===`、`=== 大纲.md ===` 标记。" };
-      const r = await apiPost("/api/chat", { messages: [sys, ...msgs.filter((m) => m.role !== "system")], temperature: 0.6, max_tokens: 8000 });
+      const r = await apiPost("/api/chat", { messages: [sys, ...msgs.filter((m) => m.role !== "system")], temperature: 0.6, max_tokens: 8000 }, { timeout: 0 });
       const text = r.content || "";
       const f = {};
       const blocks = text.split(/===\s*(.*?)\.md\s*===/);
@@ -135,7 +135,7 @@ export default function NewWizard({ go }) {
             setStatus("导入中…（拆章落盘）");
             try {
               const text = await f.text();
-              const r = await apiPost(`/api/book/${encodeURIComponent(name)}/import-txt`, { text });
+              const r = await apiPost(`/api/book/${encodeURIComponent(name)}/import-txt`, { text }, { timeout: 0 });
               setStatus(`导入完成：${r.chapters} 章 ✅ 正在跳转…`);
               setTimeout(() => go("workspace", r.name || name), 900);
             } catch (err) { setStatus("导入失败：" + err.message); }

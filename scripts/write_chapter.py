@@ -24,6 +24,9 @@ import re
 import sys
 import urllib.request
 
+import chapters  # 章节文件命名/枚举的单一事实源（同目录模块）
+import usage_log  # 用量记账常量/流水（R48；同目录模块，脚本与测试均可直接导入）
+
 # ---------------------------------------------------------------------------
 # 1. 配置（OpenAI 兼容协议，多后端通用）
 #    默认读项目根 .env 里的 AGNES_API_KEY / AGNES_BASE_URL / AGNES_MODEL，
@@ -58,7 +61,9 @@ def env_or(key_env: str, key_dotenv: str, default: str) -> str:
 
 # 去 AI 腔红线（P1 第二块·预防端）：由 scripts/deai.py 的 L1 词表实证提炼。
 # 生成时就遵守，比事后改写省事。要增删红线在此维护。
-DEAI_RULES = """去AI腔红线（写作时必须逐条自检，违反即失败）：
+# 命名说明：内置默认统一用 BUILTIN_ 前缀（server 默认端点取真内置版用），
+# 仅作下方 load_rules 的兜底；运行值是加载块里的同名 effective 常量（rules/ 可覆盖）。
+BUILTIN_DEAI_RULES ="""去AI腔红线（写作时必须逐条自检，违反即失败）：
 1. 副词克制——微微、轻轻、缓缓、默默、淡淡、深深这类万能副词，一章每种至多出现一次；能用具体动作或物件细节替代时就不写副词。
 2. 动作去模板——不连发「点了点头」「叹了口气」「皱了皱眉」「若有所思」这类表演式反应；对话要像活人一来一往，别每句都挂一个动作。
 3. 禁陈词比喻——不写「夜色如墨」「空气凝固」「时间静止」「心头一紧」等用滥的比喻；同一种意象（雨刷、水雾、风、烟、灯光）一章至多用一次，严禁跨章反复用同一意象收尾。
@@ -67,13 +72,13 @@ DEAI_RULES = """去AI腔红线（写作时必须逐条自检，违反即失败�
 6. 标点克制——破折号全章不超过10处（含对话内），省略号只在人物语塞、犹豫处使用。
 7. 结尾戒套路——不用「夜还很长」「游戏才刚刚开始」这类开放式抒情收尾，用具体动作、画面或一句落地对话收束本章。"""
 
-SYSTEM_PROMPT = (
+BUILTIN_SYSTEM_PROMPT = (
     "你是一位资深中文网文作者，擅长都市异能/玄幻/悬疑等类型小说的连载创作。"
     "你负责根据给定设定续写章节正文，只输出小说正文，不要输出任何解释、"
     "章节标题以外的标记或对话。正文用流畅的中文白话，有网文节奏感，"
     "对话要像活人说话。\n\n"
     "【去AI腔红线】\n"
-    + DEAI_RULES
+    + BUILTIN_DEAI_RULES
 )
 
 # P1 记忆层：滚动状态账本（一本书 = 一本 story_state.md）
@@ -103,11 +108,14 @@ STATE_TEMPLATE = """# 《{书名}》· 故事状态账本（机器维护，作�
 ## 关键物件（外观一经写死严禁漂移）
 - （空）
 
+## 情绪弧线（近 3 章的主导情绪与强度，避免章章同调）
+- （第N章=主导情绪(强度1-5)）
+
 ## 待续状态
 - （下一章最该接续的点，一句话）
 """
 
-STATE_UPDATER_PROMPT = """你是小说故事的"状态账本书记员"，职责是维护一本书的 {STATE_FILE}，让 AI 后续续写不崩。
+BUILTIN_STATE_UPDATER_PROMPT = """你是小说故事的"状态账本书记员"，职责是维护一本书的 {STATE_FILE}，让 AI 后续续写不崩。
 
 输入分三块（用分隔线隔开）：
 ① 账本维护规则（见下）
@@ -124,8 +132,9 @@ STATE_UPDATER_PROMPT = """你是小说故事的"状态账本书记员"，职责�
 5. ## 关键事件时间线：把本章关键事件按发生顺序整理，整体保留最近约 10 条；更早的合并压缩成一条"（更早：……）"放在最底。
 6. ## 伏笔账本：本章新埋的伏笔加一条"待回收·埋设于第X章"（X=本章章号，必须写明埋设章）；本章被回收/解答的改成"已回收·埋设于第Y章，回收于本章"；其余条目原样保留，不许丢。若某条"待回收"伏笔的埋设章距本章已超过 3 章仍未回收，在该条目末尾追加"⚠超期（已N章未回收，建议尽快安排回收或标失效）"。
 7. ## 关键物件：新出现的物件必须登记（含外观、现在归属、所在位置）；旧账里已登记过的物件，外观描述严禁改动（防止道具漂移）。
-8. 全文用紧凑 Markdown 列表；输出就是新账本全文本身，不要任何前言、后语、代码块围栏。
-9. 冲突自检（防幻觉漏记/记错）：若本章正文与旧账存在矛盾——时间倒退、计数不一致、
+8. ## 情绪弧线（v0.9.2 新增第 7 节）：记录近 3 章的主导情绪与强度（格式：第N章=主导情绪(强度1-5)），每章滚动更新——保留最近 3 章即可；若连续两章情绪同调，必须在「待续状态」里标记换调节点。
+9. 全文用紧凑 Markdown 列表；输出就是新账本全文本身，不要任何前言、后语、代码块围栏。
+10. 冲突自检（防幻觉漏记/记错）：若本章正文与旧账存在矛盾——时间倒退、计数不一致、
    角色状态/位置矛盾、物件归属或外观变化——必须在新账对应小节用『⚠冲突：旧账记X，本章写Y（请作者裁决）』
    追加一条，明确标出差异，不许悄悄覆盖、不许假装没看见。无冲突则不写。
 
@@ -144,11 +153,13 @@ def read_text(path: str) -> str:
         return f.read().strip()
 
 
-# 账本 7 个小节的固定主干（允许模型给括号里的说明换措辞，但主干标题必须齐全）
+# 账本 8 个小节的固定主干（允许模型给括号里的说明换措辞，但主干标题必须齐全）
 # 血泪史（CH-26）：ch007 写完后账本被模型输出截断，末行停在"## 关键事件时间线（最近约 10"，
 # 缺第 4–7 节还继续用——续写建立在错误前提上。此后每次落盘账本都要过这道校验。
+# v0.9.2：第 7 节「情绪弧线」回归（数据事故重建时丢失）。
 STATE_SECTIONS = ["## 当前时间", "## 计数与资源", "## 角色状态",
-                  "## 关键事件时间线", "## 伏笔账本", "## 关键物件", "## 待续状态"]
+                  "## 关键事件时间线", "## 伏笔账本", "## 关键物件",
+                  "## 情绪弧线", "## 待续状态"]
 
 
 def validate_state(state_text: str) -> list:
@@ -158,10 +169,10 @@ def validate_state(state_text: str) -> list:
             if not any(ln.strip().startswith(sec) for ln in lines)]
 
 
-def chapter_no_of(fname: str) -> int:
-    """从文件名取章节号，如 ch003.meta.md -> 3；不是章节文件返回 -1。"""
-    m = re.match(r"ch(\d+)(?:\.meta)?\.md$", fname)
-    return int(m.group(1)) if m else -1
+# 章节文件口径统一（2026-09 清扫）：章号解析/章节枚举全部走 chapters.py 单一事实源，
+# 这里保留同名 re-export 兼容旧调用方（vector_recall / relation_graph 等仍引用
+# write_chapter.chapter_no_of）。CH_RE 3 位起、支持 4+ 位，999 章上限已解除。
+chapter_no_of = chapters.chapter_no_of
 
 
 def clamp_words(w) -> int:
@@ -197,16 +208,13 @@ def build_context(book_dir: str, chapter_no: int, words: int = 3000) -> str:
 
     # 全书记忆：只注入滚动账本 story_state.md（唯一记忆源，上下文不随章数膨胀）
     state = read_text(os.path.join(book_dir, STATE_FILE))
-    chapters_dir = os.path.join(book_dir, "chapters")
+    chapters_dir = chapters.chapter_dir(book_dir)
     prev_tail = ""
     if os.path.isdir(chapters_dir):
-        legacy = sorted(
-            (f for f in os.listdir(chapters_dir) if re.match(r"ch\d+\.md$", f)),
-            key=lambda f: chapter_no_of(f),
-        )
+        legacy = chapters.list_chapter_files(book_dir)
         # 上一章正文结尾：只取编号【小于本章】的最近章节。
         # （回写重写第 N 章时，N+1 已存在——若取全局最新会拿"未来章"结尾来续写第 N 章，上下文错位）
-        prior = [f for f in legacy if chapter_no_of(f) < chapter_no]
+        prior = [f for f in legacy if chapters.chapter_no_of(f) < chapter_no]
         if prior:
             txt = read_text(os.path.join(chapters_dir, prior[-1]))
             if "<!--MEMORY-->" in txt:
@@ -219,6 +227,19 @@ def build_context(book_dir: str, chapter_no: int, words: int = 3000) -> str:
                      "其中的事实/计数/伏笔/物件描述不得违背或推翻）】\n" + state)
     else:
         parts.append("【提醒】本故事还没有记忆账本，请先用 --init-state 初始化（或人工创建 story_state.md）。")
+
+    # v0.8 注入点①（R37）：文风指纹——style_learn.py 产出 books/<书>/文风指纹.md。
+    # 文件不存在则不注入（零破坏）：没学过文风的书完全不受影响。
+    style_fp = read_text(os.path.join(book_dir, "文风指纹.md"))
+    if style_fp:
+        parts.append("【文风指纹（学自本书成稿的文风画像：模仿其句长节奏、对话密度、"
+                     "意象偏好与叙事人称；只学笔法，不复制内容）】\n" + style_fp)
+
+    # v0.8 注入点②（R39 可选向量层）：向量召回缓存——vector_recall.py recall 后
+    # 落盘 books/<书>/_recall/chXXX.md；文件不存在则不注入（零破坏，嵌入通道未配置时天然无此文件）。
+    recall = read_text(os.path.join(book_dir, "_recall", f"ch{chapter_no:03d}.md"))
+    if recall:
+        parts.append("【向量召回·相关旧章片段（按语义相似度召回，供呼应旧情节，不是必须全部用到）】\n" + recall)
 
     # R32 闸口：作者确认过的章纲（--plan 产物），事件/钩子/伏笔操作必须严格遵循
     plan = read_text(os.path.join(chapters_dir, f"ch{chapter_no:03d}.章纲.md"))
@@ -297,7 +318,7 @@ def _post_chat(base_url: str, api_key: str, payload: dict, timeout: int = 240):
 def call_llm(api_key: str, base_url: str, model: str, user_content: str,
              temperature: float = 0.85, max_tokens: int = 12000,
              reasoning_effort: str = "low", max_retries: int = 2,
-             system_prompt: str = SYSTEM_PROMPT, *,
+             system_prompt: str = None, *,
              fallback_key: str = None, fallback_base_url: str = None,
              fallback_model: str = None, usage_meta: dict = None) -> str:
     """调用 chat completion（OpenAI 兼容），返回正文。
@@ -308,13 +329,15 @@ def call_llm(api_key: str, base_url: str, model: str, user_content: str,
     - 防单点故障：主模型连续失败（网络/限流/空内容）后自动切备用通道；
       备用通道优先级：显式参数 > .env 的 FALLBACK_API_KEY/FALLBACK_BASE_URL/FALLBACK_MODEL。
     - usage_meta={"action","book","chapter"}：传了就顺带记用量流水（R48），失败不影响主流程。
+    - system_prompt 缺省在调用时取 load_rules 加载后的 effective SYSTEM_PROMPT
+      （rules/system.md 可覆盖），避免函数定义时冻结内置默认。
     对空内容/限流做有限重试，不再静默吞错。"""
     import time
 
     payload = {
         "model": model,
         "messages": [
-            {"role": "system", "content": system_prompt},
+            {"role": "system", "content": system_prompt or SYSTEM_PROMPT},
             {"role": "user", "content": user_content},
         ],
         "temperature": temperature,
@@ -352,7 +375,7 @@ def call_llm(api_key: str, base_url: str, model: str, user_content: str,
                 try:
                     import usage_log
                     m = usage_meta or {}
-                    usage_log.log_usage(m.get("action", "写章"), ch_model,
+                    usage_log.log_usage(m.get("action", usage_log.ACTION_WRITE), ch_model,
                                         usage.get("prompt_tokens"),
                                         usage.get("completion_tokens"),
                                         book=m.get("book", ""), chapter=m.get("chapter"))
@@ -441,11 +464,11 @@ def init_state(api_key: str, base_url: str, model: str, book_dir: str,
         temperature=0.2, max_tokens=4000, reasoning_effort=reasoning_effort,
         system_prompt="你是严谨的故事状态账本初始化程序。",
         max_retries=3,
-        usage_meta={"action": "建账", "book": book_name},
+        usage_meta={"action": usage_log.ACTION_LEDGER_INIT, "book": book_name},
     )
 
 
-AUDIT_PROMPT = """你是小说故事的一致性审计员。对照【旧账本】与【本章正文】（正文过长已截取首尾），
+BUILTIN_AUDIT_PROMPT = """你是小说故事的一致性审计员。对照【旧账本】与【本章正文】（正文过长已截取首尾），
 逐条找出并列出：
 1. 冲突：正文与账本矛盾——时间倒退或跳跃异常、计数（如回闪次数/资源）对不上、
    角色状态或所在位置矛盾、物件归属/外观与账本冲突、已回收的伏笔又被当未解使用；
@@ -457,9 +480,11 @@ AUDIT_PROMPT = """你是小说故事的一致性审计员。对照【旧账本�
 
 
 def audit_chapter(api_key: str, base_url: str, model: str, book_dir: str,
-                  chapter: int, reasoning_effort: str = "low") -> str:
+                  chapter: int, reasoning_effort: str = "low",
+                  report_suffix: str = "") -> str:
     """一致性审计：对照账本检查单章正文的冲突/漏记。
-    只读审计，不改账本与正文；报告落盘 chapters/chXXX.一致性审计.md。"""
+    只读审计，不改账本与正文；报告落盘 chapters/chXXX.一致性审计<report_suffix>.md。
+    report_suffix：报告文件名后缀（R42 交叉审计传 "-交叉"，与主通道审计报告分离共存）。"""
     state_path = os.path.join(book_dir, STATE_FILE)
     out_dir = os.path.join(book_dir, "chapters")
     src = os.path.join(out_dir, f"ch{chapter:03d}.md")
@@ -484,17 +509,77 @@ def audit_chapter(api_key: str, base_url: str, model: str, book_dir: str,
         temperature=0.1, max_tokens=12000, reasoning_effort=reasoning_effort,
         system_prompt="你是严谨的小说一致性审计员，只输出审计清单。",
         max_retries=3,
-        usage_meta={"action": "审计", "book": os.path.basename(book_dir.rstrip("/\\")),
+        usage_meta={"action": usage_log.ACTION_AUDIT, "book": os.path.basename(book_dir.rstrip("/\\")),
                     "chapter": chapter},
     ).strip()
-    out = os.path.join(out_dir, f"ch{chapter:03d}.一致性审计.md")
+    out = os.path.join(out_dir, f"ch{chapter:03d}.一致性审计{report_suffix}.md")
     with open(out, "w", encoding="utf-8") as f:
         f.write(report)
     print(f"[audit] 审计报告已落盘 → {out}（未改动账本与正文）")
     return out
 
 
-PLAN_PROMPT = """【本次任务调整】先不要写正文全文。请作为策划输出：
+# ── v0.9.2 插件提示词链 + 6 维评分（数据事故重建回补，蒸馏自 novel-evaluator）──
+def plugin_prompt(name: str, builtin: str):
+    """插件提示词链：插件启用且 prompts/judge.md 存在 → 用插件的；
+    插件存在但已停用 → 返回 None（调用方拒绝执行，停用即生效）；
+    无此插件 → 用内置兜底。坏 manifest 由 loader 容错跳过。"""
+    try:
+        import plugin_loader
+    except ImportError:
+        return builtin
+    for p in plugin_loader.scan_plugins():
+        if p["name"] == name or p["dir"] == name:
+            if not p["enabled"]:
+                return None
+            jp = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                              "plugins", p["dir"], "prompts", "judge.md")
+            return read_text(jp) or builtin
+    return builtin
+
+
+BUILTIN_SCORE_PROMPT = """你是网文质量评审。对以下章节正文做六维评分（各 0-100 分）并给出总分与一句话总评：
+情节（推进力与逻辑）、人物（动机与成长）、文笔（流畅度与画面感）、世界观（一致性）、情感（代入感）、创新（新鲜度）。
+输出 JSON：{"scores":{"情节":0,"人物":0,"文笔":0,"世界观":0,"情感":0,"创新":0},"total":0,"comment":"一句话总评","issues":["具体问题"]}
+只输出 JSON 本身。
+
+【章节正文】
+{chapter_body}"""
+
+
+def score_chapter(api_key: str, base_url: str, model: str, book_dir: str,
+                  chapter: int, reasoning_effort: str = "low") -> str:
+    """6 维评分（情节/人物/文笔/世界观/情感/创新）：提示词走插件链，报告落盘 chXXX.评分.md。"""
+    src = os.path.join(book_dir, "chapters", f"ch{chapter:03d}.md")
+    body = read_text(src)
+    if not body:
+        raise SystemExit(f"缺章节正文：{src}")
+    prompt_tmpl = plugin_prompt("evaluate", BUILTIN_SCORE_PROMPT)
+    if prompt_tmpl is None:
+        print("[score] 插件 evaluate 已停用，评分拒绝执行（在技能中心或 plugin.json 重新启用）。", file=sys.stderr)
+        return ""
+    if "{chapter_body}" not in prompt_tmpl:
+        prompt_tmpl = prompt_tmpl.rstrip() + "\n\n【章节正文】\n{chapter_body}"
+    if len(body) > 3200:
+        body = body[:1400] + "\n\n……（正文中段已省略，评分以首尾为准）……\n\n" + body[-1400:]
+    prompt = prompt_tmpl.replace("{chapter_body}", body)
+    print(f"[score] ch{chapter:03d}：6 维评分中（提示词来源：插件链）...")
+    report = call_llm(
+        api_key, base_url, model, prompt,
+        temperature=0.2, max_tokens=2000, reasoning_effort=reasoning_effort,
+        system_prompt="你是专业小说评分员，只输出 JSON。",
+        max_retries=3,
+        usage_meta={"action": "评分", "book": os.path.basename(book_dir.rstrip("/\\")),
+                    "chapter": chapter},
+    ).strip()
+    out = os.path.join(book_dir, "chapters", f"ch{chapter:03d}.评分.md")
+    with open(out, "w", encoding="utf-8") as f:
+        f.write(report)
+    print(f"[score] 评分已落盘 → {out}")
+    return out
+
+
+BUILTIN_PLAN_PROMPT = """【本次任务调整】先不要写正文全文。请作为策划输出：
 1) 本章章纲：本章目标 / 关键事件 / 末尾钩子 / 伏笔操作（本章埋设/推进/回收哪条，引用账本中的伏笔）
 2) 开头 200 字试写（定风格用）
 只输出这两部分，不要输出正文全文。"""
@@ -517,17 +602,11 @@ def load_rules(name: str, default: str) -> str:
     return default
 
 
-DEAI_RULES = load_rules("deai_rules.md", DEAI_RULES)
-SYSTEM_PROMPT = load_rules(
-    "system.md",
-    "你是一位资深中文网文作者，擅长都市异能/玄幻/悬疑等类型小说的连载创作。"
-    "你负责根据给定设定续写章节正文，只输出小说正文，不要输出任何解释、"
-    "章节标题以外的标记或对话。正文用流畅的中文白话，有网文节奏感，"
-    "对话要像活人说话。\n\n【去AI腔红线】\n" + DEAI_RULES,
-)
-STATE_UPDATER_PROMPT = load_rules("state_updater.md", STATE_UPDATER_PROMPT)
-AUDIT_PROMPT = load_rules("audit.md", AUDIT_PROMPT)
-PLAN_PROMPT = load_rules("plan.md", PLAN_PROMPT)
+DEAI_RULES = load_rules("deai_rules.md", BUILTIN_DEAI_RULES)
+SYSTEM_PROMPT = load_rules("system.md", BUILTIN_SYSTEM_PROMPT)
+STATE_UPDATER_PROMPT = load_rules("state_updater.md", BUILTIN_STATE_UPDATER_PROMPT)
+AUDIT_PROMPT = load_rules("audit.md", BUILTIN_AUDIT_PROMPT)
+PLAN_PROMPT = load_rules("plan.md", BUILTIN_PLAN_PROMPT)
 
 
 def plan_chapter(api_key: str, base_url: str, model: str, book_dir: str,
@@ -541,7 +620,7 @@ def plan_chapter(api_key: str, base_url: str, model: str, book_dir: str,
         temperature=0.4, max_tokens=4000, reasoning_effort=reasoning_effort,
         system_prompt="你是中文网文资深策划，基于资料输出章纲与试写，简洁、可执行。",
         max_retries=3,
-        usage_meta={"action": "出章纲", "book": os.path.basename(book_dir.rstrip("/\\")),
+        usage_meta={"action": usage_log.ACTION_OUTLINE, "book": os.path.basename(book_dir.rstrip("/\\")),
                     "chapter": chapter},
     ).strip()
     out = os.path.join(book_dir, "chapters", f"ch{chapter:03d}.章纲.md")
@@ -571,7 +650,7 @@ def adjust_chapter(api_key: str, base_url: str, model: str, book_dir: str,
         temperature=0.5, max_tokens=12000, reasoning_effort=reasoning_effort,
         system_prompt="你是资深中文网文作者，只输出改写后的正文本身。",
         max_retries=2,
-        usage_meta={"action": "字数调整", "book": os.path.basename(book_dir.rstrip("/\\")),
+        usage_meta={"action": usage_log.ACTION_ADJUST_WORDS, "book": os.path.basename(book_dir.rstrip("/\\")),
                     "chapter": chapter},
     ).strip()
     bak = os.path.join(book_dir, "chapters", f"ch{chapter:03d}.bak.md")
@@ -585,6 +664,486 @@ def adjust_chapter(api_key: str, base_url: str, model: str, book_dir: str,
     if abs(len(new_body) - target) / target > 0.30:
         print(f"⚠ 调整后 {len(new_body)} 字仍超出目标 ±30%，可再跑一次 --adjust。", file=sys.stderr)
     return len(new_body)
+
+
+# ---------------------------------------------------------------------------
+# v0.8 / v0.9 功能扩展（R36 拆书 / R37 学文风 / R39 向量注入 / R41 平台自检 /
+# R42 交叉审计 / R43 读者反馈 / R45 账本体量 / R46 证据包 / R49 账本重算）
+# ---------------------------------------------------------------------------
+
+def sample_chapters(book_dir, n=3, frag=600):
+    """R37 采集最近 n 章的片段（每章首尾各 frag 字）供学文风。返回 [{"file","text"}]。零 token。"""
+    files = chapters.list_chapter_files(book_dir)[-int(n):]
+    if not files:
+        return []
+    ch_dir = chapters.chapter_dir(book_dir)
+    out = []
+    for fn in files:
+        body = read_text(os.path.join(ch_dir, fn))
+        if "<!--MEMORY-->" in body:
+            body = body.split("<!--MEMORY-->", 1)[0]
+        body = body.strip()
+        if not body:
+            continue
+        sample = body if len(body) <= frag * 2 else body[:frag] + "\n……\n" + body[-frag:]
+        out.append({"file": fn, "text": sample})
+    return out
+
+
+_PLACEHOLDER_MARKERS = ("（待填写）", "待补充", "待填写", "TODO", "占位", "示例文本",
+                        "{书名}", "{{", "此处输入", "在这里写下", "一句话简介")
+
+
+def is_placeholder_doc(text) -> bool:
+    """检测三件套等文档是否为占位/模板文档：空、过短、或含模板占位标记。
+    用于写章前提醒（占位设定会让模型把模板文字当事实写进正文）。"""
+    if not text or not text.strip():
+        return True
+    t = text.strip()
+    if len(t) < 20:
+        return True
+    return any(m in t for m in _PLACEHOLDER_MARKERS)
+
+
+def write_with_backup(book_dir, run_fn, *args, **kwargs):
+    """写章前自动全书备份（--auto-backup 语义封装）：先备份整本书再执行 run_fn。
+    返回 (备份zip路径, run_fn 结果)；备份失败只警告不阻断写章。"""
+    bak = ""
+    try:
+        import backup_book
+        bak = backup_book.backup_book(book_dir)
+    except Exception as e:  # 备份失败绝不挡写作
+        print(f"⚠ 写前备份失败（继续写章）：{e}", file=sys.stderr)
+    return bak, run_fn(*args, **kwargs)
+
+
+BUILTIN_DECONSTRUCT_RULES = (
+    "按七维拆解：① 文风指纹 ② 情节结构 ③ 人物塑造 ④ 独特性 ⑤ 情绪曲线 "
+    "⑥ 热梗与时代感 ⑦ 章节钩子设计。每维给结论与原文证据。")
+
+
+def deconstruct_book(api_key, base_url, model, book_dir, reasoning_effort="low"):
+    """R36 拆书：按 rules/deconstruct.md 七维规则拆解一本书，产出 _research/拆书报告.md。
+    免章号动作（v0.8 修复：此前 --deconstruct 被夹在 --chapter 必填检查之后不可达）。"""
+    rules = load_rules("deconstruct.md", BUILTIN_DECONSTRUCT_RULES)
+    materials = []
+    for fn in ("设定.md", "角色卡.md", "大纲.md"):
+        t = read_text(os.path.join(book_dir, fn))
+        if t:
+            materials.append(f"【{fn}】\n{t[:2000]}")
+    ch_dir = chapters.chapter_dir(book_dir)
+    files = chapters.list_chapter_files(book_dir)[:3]  # 只喂前 3 章节选，防输入顶爆推理
+    for fn in files:
+        materials.append(f"【正文节选 {fn}】\n{read_text(os.path.join(ch_dir, fn))[:2500]}")
+    if not materials:
+        raise SystemExit(f"书目录里没有可拆的材料（三件套与 chapters/ 均为空）：{book_dir}")
+    prompt = ("请按下方拆书规则对这本书做完整拆解，输出结构化拆书报告"
+              "（Markdown；七维逐项给结论，证据引章节号或出处文件）。\n\n"
+              f"【拆书规则】\n{rules}\n\n【拆解对象材料】\n" + "\n\n".join(materials))
+    print(f"[deconstruct] 拆解《{os.path.basename(book_dir.rstrip('/\\'))}》（材料 {len(materials)} 块）...")
+    report = call_llm(
+        api_key, base_url, model, prompt,
+        temperature=0.3, max_tokens=12000, reasoning_effort=reasoning_effort,
+        system_prompt="你是资深网文拆书编辑，按规则输出拆书报告本身，不要客套话。",
+        max_retries=3,
+        usage_meta={"action": usage_log.ACTION_DISSECT, "book": os.path.basename(book_dir.rstrip("/\\"))},
+    )
+    out_dir = os.path.join(book_dir, "_research")
+    os.makedirs(out_dir, exist_ok=True)
+    out = os.path.join(out_dir, "拆书报告.md")
+    with open(out, "w", encoding="utf-8") as f:
+        f.write(report.strip())
+    print(f"[deconstruct] 拆书报告已落盘 → {out}")
+    return out
+
+
+TRILOGY_PROMPT = """基于上面的拆书报告，为同一世界观规划一部三部曲蓝图。输出 Markdown：
+1. 三部曲总名与一句话总纲；
+2. 每一部：书名 / 主线一句话 / 核心冲突 / 主角弧光 / 结尾钩子（如何钩住下一部）；
+3. 跨三部曲的总伏笔网（哪一部埋、哪一部收）；
+4. 沿用拆书报告总结的文风要点。
+只输出蓝图本身。"""
+
+
+def blueprint_from_report(api_key, base_url, model, report_path, out_path=None,
+                          reasoning_effort="low"):
+    """读拆书报告 → LLM 生成三部曲蓝图 → 落盘蓝图文件（默认与报告同目录），返回蓝图路径。"""
+    report = read_text(report_path)
+    if not report:
+        raise SystemExit(f"拆书报告为空或不存在：{report_path}")
+    print(f"[blueprint] 读拆书报告 → 生成三部曲蓝图...")
+    blueprint = call_llm(
+        api_key, base_url, model, report + "\n\n" + TRILOGY_PROMPT,
+        temperature=0.5, max_tokens=12000, reasoning_effort=reasoning_effort,
+        system_prompt="你是网文总策划，只输出三部曲蓝图本身。",
+        max_retries=3,
+        usage_meta={"action": usage_log.ACTION_BLUEPRINT, "book": os.path.basename(report_path)},
+    )
+    if out_path is None:
+        out_path = os.path.join(os.path.dirname(os.path.abspath(report_path)), "三部曲蓝图.md")
+    with open(out_path, "w", encoding="utf-8") as f:
+        f.write(blueprint.strip())
+    print(f"[blueprint] 蓝图已落盘 → {out_path}")
+    return out_path
+
+
+def gen_trilogy(api_key, base_url, model, book_dir, reasoning_effort="low"):
+    """从书的 _research/拆书报告.md 生成三部曲蓝图（blueprint_from_report 的定位封装）。"""
+    report_path = os.path.join(book_dir, "_research", "拆书报告.md")
+    if not os.path.exists(report_path):
+        raise SystemExit(f"缺拆书报告：{report_path}（先跑 --deconstruct）")
+    return blueprint_from_report(api_key, base_url, model, report_path,
+                                 reasoning_effort=reasoning_effort)
+
+
+# ── R41 零 token 脱敏扫描：人名/地名/品牌词频+定位（输出报告，不改正文）──────
+PRIVACY_BRANDS = ["微信", "支付宝", "腾讯", "阿里", "百度", "抖音", "快手", "微博",
+                  "淘宝", "京东", "苹果", "华为", "小米", "特斯拉", "奔驰", "宝马",
+                  "可口可乐", "星巴克", "耐克", "阿迪达斯"]
+
+
+def collect_privacy_terms(book_dir):
+    """零 token 收集脱敏候选词：角色卡里的人名、设定/大纲里标注的地名、内置品牌词表。
+    返回 [{"term","type","count","locations"}]（count/locations 由调用方统计填充）。"""
+    raw = []
+    for ln in read_text(os.path.join(book_dir, "角色卡.md")).splitlines():
+        m = re.match(r"^\s*[^：:]{1,6}[：:]\s*([\u4e00-\u9fa5A-Za-z0-9·]{2,6})", ln)
+        if m and m.group(1) not in ("无", "空"):
+            raw.append((m.group(1), "人名"))
+    for fn in ("设定.md", "大纲.md"):
+        for ln in read_text(os.path.join(book_dir, fn)).splitlines():
+            m = re.search(r"(?:地名|城市|地点|场景)[：:]\s*([\u4e00-\u9fa5A-Za-z0-9]{2,8})", ln)
+            if m:
+                raw.append((m.group(1), "地名"))
+    raw.extend((b, "品牌") for b in PRIVACY_BRANDS)
+    seen, out = set(), []
+    for term, ty in raw:
+        if term not in seen:
+            seen.add(term)
+            out.append({"term": term, "type": ty, "count": 0, "locations": []})
+    return out
+
+
+def privacy_scan(book_dir):
+    """零 token 版权脱敏扫描：人名/地名/品牌词频+定位，报告落盘 books/<书>/隐私脱敏扫描.md。
+    只输出报告，绝不改正文。返回 report dict。"""
+    terms = collect_privacy_terms(book_dir)
+    ch_dir = chapters.chapter_dir(book_dir)
+    files = chapters.list_chapter_files(book_dir)
+    for item in terms:
+        for fn in files:
+            lines = read_text(os.path.join(ch_dir, fn)).splitlines()
+            for ln_no, line in enumerate(lines, 1):
+                c = line.count(item["term"])
+                if c:
+                    item["count"] += c
+                    if len(item["locations"]) < 5:
+                        item["locations"].append(f"{fn} L{ln_no}")
+    hits = [t for t in terms if t["count"]]
+    print(f"[privacy] 脱敏扫描：候选词 {len(terms)} 个，命中 {len(hits)} 个（{len(files)} 章）")
+    for t in hits:
+        print(f"  ⚠ [{t['type']}]「{t['term']}」×{t['count']}（{('、'.join(t['locations']))}）")
+    out = os.path.join(book_dir, "隐私脱敏扫描.md")
+    lines = [f"# 版权脱敏扫描报告（零 token，只读不改稿）", "",
+             f"- 扫描章节：{len(files)} 章；候选词 {len(terms)} 个，命中 {len(hits)} 个", ""]
+    if hits:
+        lines.append("| 词 | 类型 | 次数 | 定位 |")
+        lines.append("|---|---|---|---|")
+        for t in hits:
+            lines.append(f"| {t['term']} | {t['type']} | {t['count']} | {('、'.join(t['locations']))} |")
+    else:
+        lines.append("（未命中任何候选词）")
+    with open(out, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines) + "\n")
+    print(f"[privacy] 报告已落盘 → {out}")
+    return {"terms": terms, "chapters": len(files), "report_path": out}
+
+
+# ── R49 账本重算 ──────────────────────────────────────────────────────────────
+def extract_conflicts(state_text):
+    """提取账本中的『⚠冲突』条目（账本更新器规则 9 写入）。
+    R49 重算报告与 R41 平台自检的冲突来源。"""
+    return [ln.strip() for ln in (state_text or "").splitlines() if "⚠冲突" in ln]
+
+
+def recalc_from(book_dir, start_chapter, update_fn):
+    """R49 从 chNNN 快照起逐章重算账本：以快照为起点，逐章用 update_fn(body, old_state)
+    推进并覆盖 story_state.md（含快照同步），产出重算报告（逐章结果 + 冲突列表）。
+    update_fn 由调用方注入（CLI 接 update_state；测试注入假函数实现零网络）。
+    账本结构校验（防坏账进快照链）：起点快照不合格 → 打印冲突清单并中止（不写任何快照）；
+    每章重算产物不合格 → 同样中止，报告标注中断章。
+    返回 report dict（中断时含 "interrupted" 章号），并落盘 chapters/账本重算报告.md。"""
+    start = int(start_chapter)
+    snap = read_text(os.path.join(book_dir, "_snapshots", f"ch{start:03d}.state.md"))
+    if not snap:
+        raise SystemExit(f"找不到快照 _snapshots/ch{start:03d}.state.md"
+                         f"——R49 以章快照为重算起点（写章/--state-only 时自动生成）。")
+    ch_dir = os.path.join(book_dir, "chapters")
+    if not os.path.isdir(ch_dir):
+        raise SystemExit(f"书目录里没有 chapters/：{book_dir}")
+    nums = sorted(chapters.chapter_no_of(f) for f in os.listdir(ch_dir)
+                  if chapters.CH_RE.match(f))
+    todo = [n for n in nums if n >= start]
+    if not todo:
+        raise SystemExit(f"第 {start} 章及之后没有正文可重算。")
+    miss = validate_state(snap)
+    if miss:
+        print(f"[recalc] 起点快照 ch{start:03d}.state.md 结构校验未通过：缺少小节 {miss}",
+              file=sys.stderr)
+        for c in extract_conflicts(snap):
+            print(f"  ⚠ {c}", file=sys.stderr)
+        raise SystemExit("[recalc] 起点账本不合格，中止重算（未写任何快照）。"
+                         "请人工修复快照或 story_state.md 后再重算。")
+    print(f"[recalc] 从 ch{start:03d} 快照起重算 {len(todo)} 章（ch{todo[0]:03d}~ch{todo[-1]:03d}）...")
+    state = snap
+    rows, total_conf = [], 0
+    interrupted = None
+    for n in todo:
+        body = read_text(os.path.join(ch_dir, f"ch{n:03d}.md"))
+        if "<!--MEMORY-->" in body:
+            body = body.split("<!--MEMORY-->", 1)[0]
+        new_state = update_fn(body, state)
+        confs = extract_conflicts(new_state)
+        miss = validate_state(new_state)
+        if miss:
+            interrupted = n
+            print(f"  ✗ ch{n:03d} 重算产物结构校验未通过：缺少小节 {miss}，中止重算"
+                  f"（保留上一章的账本与快照）。", file=sys.stderr)
+            rows.append({"chapter": n, "chars": len(body.strip()),
+                         "state_chars": len(new_state), "conflicts": confs,
+                         "interrupted": True, "missing": miss})
+            break
+        total_conf += len(confs)
+        rows.append({"chapter": n, "chars": len(body.strip()),
+                     "state_chars": len(new_state), "conflicts": confs})
+        state = new_state
+        with open(os.path.join(book_dir, STATE_FILE), "w", encoding="utf-8") as f:
+            f.write(state)
+        snapshot_state(book_dir, n, state)
+        print(f"  ✓ ch{n:03d} 重算完成（冲突 {len(confs)} 条）")
+    recalced = sum(1 for r in rows if not r.get("interrupted"))
+    report = {"start": start, "recalced": recalced, "total_conflicts": total_conf,
+              "chapters": rows}
+    if interrupted is not None:
+        report["interrupted"] = interrupted
+    lines = [f"# 账本重算报告（R49：从 ch{start:03d} 快照起重算 {recalced} 章）", ""]
+    if interrupted is not None:
+        lines.append(f"- ⚠ 中断于 ch{interrupted:03d}：该章重算产物结构校验未通过，"
+                     f"其后章节未重算（账本/快照停留在上一合格章）")
+    lines += [f"- 冲突总数：{total_conf}（>0 时请逐条人工裁决后重跑）", ""]
+    for r in rows:
+        mark = "（⚠ 中断章：产物不合格，未落盘）" if r.get("interrupted") else ""
+        lines.append(f"## ch{r['chapter']:03d}{mark}")
+        lines.append(f"- 正文 {r['chars']} 字 → 新账本 {r['state_chars']} 字；冲突 {len(r['conflicts'])} 条")
+        if r.get("missing"):
+            lines.append(f"- 缺少小节：{r['missing']}")
+        lines.extend(f"  - {c}" for c in r["conflicts"])
+        lines.append("")
+    out = os.path.join(ch_dir, "账本重算报告.md")
+    with open(out, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines))
+    print(f"[recalc] 完成：{recalced} 章 / 冲突 {total_conf} 条 → {out}"
+          + (f"（中断于 ch{interrupted:03d}）" if interrupted is not None else ""))
+    return report
+
+
+# ── R45 账本体量警告 ─────────────────────────────────────────────────────────
+STATE_WARN_CHARS = 6000
+
+
+def state_size_warning(state_text, limit=STATE_WARN_CHARS):
+    """R45 账本体量警告：story_state.md 超过 limit 字时返回 ⚠ 提示文案，否则空串。
+    只提醒不阻断（写章与 --state-only 都调用）。"""
+    n = len(state_text or "")
+    if n > limit:
+        return (f"⚠ 账本体量警告：story_state.md 已 {n} 字（阈值 {limit}），"
+                f"过长会稀释模型注意力——建议人工精并历史条目或启用账本分段摘要。")
+    return ""
+
+
+# ── R41 平台自检 / R46 证据包 ────────────────────────────────────────────────
+def platform_check(book_dir, chapter, write_report=True):
+    """R41 零 token 平台自检：盘点账本冲突 / 伏笔未回收 / 体检单缺失 / 文件完整性，
+    输出红灯清单 + 痕迹统计（L1 口径唯一来源 = deai.l1_scan_book）。
+    返回 report dict；write_report=True 时落盘 chapters/chXXX.平台自检.md。"""
+    ch = int(chapter)
+    red, warn = [], []
+    state = read_text(os.path.join(book_dir, STATE_FILE))
+    if not state:
+        red.append("缺记忆账本 story_state.md")
+    else:
+        confs = extract_conflicts(state)
+        if confs:
+            red.append(f"账本遗留未裁决冲突 {len(confs)} 条（搜「⚠冲突」逐条处理）")
+        pending = [it for it in parse_foreshadows(state) if it["status"] == "待回收"]
+        if pending:
+            warn.append(f"伏笔未回收 {len(pending)} 条")
+        for it in overdue_foreshadows(state, ch):
+            red.append(f"伏笔超期：{it['text'][:40]}（埋设于第{it['planted']}章）")
+    ch_dir = os.path.join(book_dir, "chapters")
+    for suffix, label in (("AI腔体检.md", "AI 腔体检单"), ("一致性审计.md", "一致性审计报告")):
+        if not os.path.exists(os.path.join(ch_dir, f"ch{ch:03d}.{suffix}")):
+            warn.append(f"ch{ch:03d} 缺{label}（用 checkup --chapter {ch} 补齐）")
+    files = chapters.list_chapter_files(book_dir)
+    if files:
+        have = {chapters.chapter_no_of(f) for f in files}
+        for n in range(1, max(have) + 1):
+            if n not in have:
+                red.append(f"章节断号：缺 ch{n:03d}.md")
+        for f in files:
+            if os.path.getsize(os.path.join(ch_dir, f)) == 0:
+                red.append(f"章节正文为空：{f}")
+    # 痕迹统计：复用 deai 唯一 L1 实现（懒导入，保持本模块轻量）
+    import deai as _deai
+    results, _rn = _deai.l1_scan_book(book_dir)
+    stats = {"chapters": len(results),
+             "hard_hits": sum(len(r["hard"]) for r in results),
+             "dash": sum(r["dash"] for r in results),
+             "ellipsis": sum(r["ellipsis"] for r in results)}
+    if stats["hard_hits"]:
+        warn.append(f"全书 AI 腔硬伤 {stats['hard_hits']} 处（deai --scan 看定位）")
+    report = {"chapter": ch, "red": red, "warn": warn, "stats": stats}
+    print(f"[platform-check] ch{ch:03d} 自检：红灯 {len(red)} / 黄灯 {len(warn)}")
+    for x in red:
+        print(f"  🔴 {x}")
+    for x in warn:
+        print(f"  🟡 {x}")
+    print(f"  痕迹统计：{stats['chapters']} 章 / hard×{stats['hard_hits']} / "
+          f"破折号×{stats['dash']} / 省略号×{stats['ellipsis']}")
+    if write_report:
+        red_lines = [f"- 🔴 {x}" for x in red] or ["- （无）"]
+        warn_lines = [f"- 🟡 {x}" for x in warn] or ["- （无）"]
+        lines = [f"# ch{ch:03d} · 平台自检报告（R41，零 token）", "",
+                 f"## 红灯清单（{len(red)}）", *red_lines, "",
+                 f"## 黄灯提醒（{len(warn)}）", *warn_lines, "",
+                 "## 痕迹统计",
+                 f"- 章 {stats['chapters']} · hard {stats['hard_hits']} · "
+                 f"破折号 {stats['dash']} · 省略号 {stats['ellipsis']}"]
+        os.makedirs(ch_dir, exist_ok=True)
+        out = os.path.join(ch_dir, f"ch{ch:03d}.平台自检.md")
+        with open(out, "w", encoding="utf-8") as f:
+            f.write("\n".join(lines) + "\n")
+        report["report_path"] = out
+        print(f"[platform-check] 报告已落盘 → {out}")
+    return report
+
+
+def export_evidence(book_dir, chapter, out_dir=None):
+    """R46 自证证据包：账本+快照+体检单+审计报告+平台自检（含交叉审计）打包 zip
+    到项目根 backups/。零 token；缺件照常打包其余并说明。返回 zip 路径。"""
+    import zipfile
+    from datetime import datetime
+    ch = int(chapter)
+    name = os.path.basename(book_dir.rstrip("/\\"))
+    out_dir = os.path.normpath(out_dir or os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), os.pardir, "backups"))
+    os.makedirs(out_dir, exist_ok=True)
+    zip_path = os.path.join(out_dir, f"自证-{name}-ch{ch:03d}-{datetime.now().strftime('%Y%m%d-%H%M%S')}.zip")
+    wanted = [
+        os.path.join(book_dir, STATE_FILE),
+        os.path.join(book_dir, "_snapshots", f"ch{ch:03d}.state.md"),
+        os.path.join(book_dir, "chapters", f"ch{ch:03d}.AI腔体检.md"),
+        os.path.join(book_dir, "chapters", f"ch{ch:03d}.一致性审计.md"),
+        os.path.join(book_dir, "chapters", f"ch{ch:03d}.一致性审计-交叉.md"),
+        os.path.join(book_dir, "chapters", f"ch{ch:03d}.平台自检.md"),
+    ]
+    packed, missing = [], []
+    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as z:
+        for full in wanted:
+            rel = os.path.relpath(full, book_dir)
+            if os.path.exists(full):
+                z.write(full, os.path.join(name, rel))
+                packed.append(rel)
+            else:
+                missing.append(rel)
+    print(f"[evidence] 证据包 → {zip_path}（{len(packed)} 件）")
+    if missing:
+        print(f"[evidence] 缺件（照常打包其余，建议先补齐）：{'、'.join(missing)}", file=sys.stderr)
+    return zip_path
+
+
+# ── R40 章纲评估 / R43 读者反馈 / R42 交叉审计 ───────────────────────────────
+OUTLINE_CHECK_PROMPT = """请以资深网文责编视角评估这章章纲，输出 Markdown 报告：
+1. 结构完整：目标/关键事件/末尾钩子/伏笔操作四要素是否齐备；
+2. 钩子强度：末尾钩子能否支撑追更，给 1-5 分与理由；
+3. 伏笔操作：埋/推/收是否与账本伏笔账自洽；
+4. 节奏：事件密度是否合理，会不会注水或赶戏；
+5. 修改建议：最多 5 条，按优先级排序。
+只输出评估报告。"""
+
+
+def outline_check(api_key, base_url, model, book_dir, chapter, reasoning_effort="low"):
+    """章纲评估：LLM 审 chapters/chXXX.章纲.md 质量，落盘 chXXX.章纲评估.md。
+    实测教训：max_tokens 必须 10000——6000 会被 agnes 的思考过程吞光返回空。"""
+    ch = int(chapter)
+    plan_path = os.path.join(book_dir, "chapters", f"ch{ch:03d}.章纲.md")
+    plan = read_text(plan_path)
+    if not plan:
+        raise SystemExit(f"缺章纲：{plan_path}（先跑 --plan --chapter {ch}）")
+    state = read_text(os.path.join(book_dir, STATE_FILE))
+    prompt = (f"【记忆账本（评估伏笔操作是否自洽用）】\n{state or '（无账本）'}\n\n"
+              f"【第 {ch} 章章纲】\n{plan}\n\n" + OUTLINE_CHECK_PROMPT)
+    print(f"[outline-check] 评估 ch{ch:03d} 章纲（max_tokens=10000，防思考吞光）...")
+    report = call_llm(
+        api_key, base_url, model, prompt,
+        temperature=0.2, max_tokens=10000, reasoning_effort=reasoning_effort,
+        system_prompt="你是资深网文责编，只输出章纲评估报告。",
+        max_retries=3,
+        usage_meta={"action": usage_log.ACTION_EVALUATE, "book": os.path.basename(book_dir.rstrip("/\\")),
+                    "chapter": ch},
+    )
+    out = os.path.join(book_dir, "chapters", f"ch{ch:03d}.章纲评估.md")
+    with open(out, "w", encoding="utf-8") as f:
+        f.write(report.strip())
+    print(f"[outline-check] 评估报告已落盘 → {out}")
+    return out
+
+
+BETA_READER_PROMPT = """你是追更读者（不是编辑），刚读完这一章。用读者口吻输出反馈：
+1. 末尾钩子：想不想点开下一章？为什么？
+2. 节奏：哪里拖了想划走、哪里赶了没跟上？
+3. 看不懂/出戏的地方：具体指出来（不用给改法）；
+4. 本章最爽的一个点 & 最无聊的一个点。
+只输出反馈本身，像评论区高赞长评，不像审稿意见。"""
+
+
+def beta_reader(api_key, base_url, model, book_dir, chapter, reasoning_effort="low"):
+    """R43 读者视角反馈：LLM 以追更读者身份读第 N 章，落盘 chXXX.读者反馈.md。"""
+    ch = int(chapter)
+    body = read_text(os.path.join(book_dir, "chapters", f"ch{ch:03d}.md"))
+    if not body:
+        raise SystemExit(f"缺章节正文：chapters/ch{ch:03d}.md")
+    if len(body) > 3200:  # 与审计同款首尾截取，防推理失控
+        body = body[:1400] + "\n\n……（正文中段已省略）……\n\n" + body[-1400:]
+    print(f"[beta-reader] 以读者视角读 ch{ch:03d} ...")
+    report = call_llm(
+        api_key, base_url, model, f"【本章正文】\n{body}\n\n" + BETA_READER_PROMPT,
+        temperature=0.7, max_tokens=10000, reasoning_effort=reasoning_effort,
+        system_prompt="你是一位真实的追更读者，只输出读者反馈。",
+        max_retries=3,
+        usage_meta={"action": usage_log.ACTION_BETA, "book": os.path.basename(book_dir.rstrip("/\\")),
+                    "chapter": ch},
+    )
+    out = os.path.join(book_dir, "chapters", f"ch{ch:03d}.读者反馈.md")
+    with open(out, "w", encoding="utf-8") as f:
+        f.write(report.strip())
+    print(f"[beta-reader] 反馈已落盘 → {out}")
+    return out
+
+
+def cross_audit(book_dir, chapter, reasoning_effort="low"):
+    """R42 交叉审计：用备用通道（FALLBACK_* 环境变量）重跑一致性审计，
+    报告落盘 chNNN.一致性审计-交叉.md，与主通道审计结论互相印证。
+    未配置 FALLBACK_API_KEY/FALLBACK_MODEL 时友好报错（不静默降级到主通道）。"""
+    fb_key = env_or("FALLBACK_API_KEY", "FALLBACK_API_KEY", "")
+    fb_model = env_or("FALLBACK_MODEL", "FALLBACK_MODEL", "")
+    if not (fb_key and fb_model):
+        raise SystemExit("交叉审计需要备用通道：请在 .env 配置 FALLBACK_API_KEY 与 "
+                         "FALLBACK_MODEL（可选 FALLBACK_BASE_URL）；未配置无法交叉印证。")
+    fb_url = env_or("FALLBACK_BASE_URL", "FALLBACK_BASE_URL", DEFAULT_BASE_URL)
+    print(f"[cross-audit] 用备用通道 {fb_model} 重审 ch{int(chapter):03d} ...")
+    return audit_chapter(fb_key, fb_url, fb_model, book_dir, int(chapter),
+                         reasoning_effort=reasoning_effort, report_suffix="-交叉")
 
 
 def main() -> int:
@@ -605,7 +1164,68 @@ def main() -> int:
     ap.add_argument("--adjust", action="store_true", help="R31 一键加长/精简：按 --target 改写第 N 章正文（--mode expand|shrink，先备份）")
     ap.add_argument("--target", type=int, default=0, help="--adjust 的目标字数")
     ap.add_argument("--mode", choices=["expand", "shrink"], default="expand", help="--adjust 的方向")
+    # ── v0.8 扩展动作 ──
+    ap.add_argument("--deconstruct", action="store_true",
+                    help="R36 拆书：按 rules/deconstruct.md 七维产出 _research/拆书报告.md（免章号）")
+    ap.add_argument("--sample-chapters", action="store_true",
+                    help="R37 采集最近章节片段供学文风（零 token，免章号；学文风用 scripts/style_learn.py）")
+    ap.add_argument("--privacy-scan", action="store_true",
+                    help="零 token 版权脱敏扫描：人名/地名/品牌词频+定位，输出报告不改正文（免章号）")
+    ap.add_argument("--gen-trilogy", action="store_true",
+                    help="从 _research/拆书报告.md 生成三部曲蓝图（免章号）")
+    ap.add_argument("--blueprint", action="store_true",
+                    help="读拆书报告输出蓝图文件（同 --gen-trilogy，免章号）")
+    # ── v0.9 扩展动作（N 为参数值本身，均免 --chapter）──
+    ap.add_argument("--recalc-from", type=int, default=0, metavar="N",
+                    help="R49 从 chNNN 快照起逐章重算账本，产出重算报告（冲突列表）")
+    ap.add_argument("--cross-audit", type=int, default=0, metavar="N",
+                    help="R42 用备用通道（FALLBACK_*）交叉审计第 N 章 → chNNN.一致性审计-交叉.md")
+    ap.add_argument("--platform-check", type=int, default=0, metavar="N",
+                    help="R41 零 token 平台自检：红灯清单+痕迹统计（免 API key）")
+    ap.add_argument("--export-evidence", type=int, default=0, metavar="N",
+                    help="R46 自证证据包（账本+快照+体检单+审计+自检）zip 到 backups/（零 token）")
+    ap.add_argument("--outline-check", type=int, default=0, metavar="N",
+                    help="章纲评估：LLM 审 chNNN.章纲.md 质量（max_tokens=10000）")
+    ap.add_argument("--beta-reader", type=int, default=0, metavar="N",
+                    help="R43 LLM 以读者视角给第 N 章反馈 → chNNN.读者反馈.md")
+    ap.add_argument("--score", type=int, default=0, metavar="N",
+                    help="v0.9.2 6 维评分（提示词走插件链，停用即拒）→ chNNN.评分.md")
     args = ap.parse_args()
+
+    # 书目录解析提前：零 token 动作（平台自检/证据包/采样/脱敏扫描）不需要 API key
+    book_dir = os.path.abspath(args.book) if args.book else ""
+    if not book_dir or not os.path.exists(book_dir):
+        print(f"书目录不存在：{book_dir or '（未指定 --book）'}")
+        return 1
+
+    # 书名 = 目录名；章节落在书目录自己的 chapters/ 下（一本书=一个文件夹）
+    book_name = os.path.basename(book_dir.rstrip("/\\"))
+    out_dir = os.path.join(book_dir, "chapters")
+    state_path = os.path.join(book_dir, STATE_FILE)
+
+    # ── 免章号·零 token 动作（无需 API key）──────────────────────────
+    if args.sample_chapters:
+        samples = sample_chapters(book_dir)
+        if not samples:
+            print(f"chapters/ 里没有可采样的章节：{book_dir}")
+            return 1
+        for s in samples:
+            print(f"── {s['file']} ──\n{s['text']}\n")
+        print(f"[sample] 已采集 {len(samples)} 章片段（学文风请跑："
+              f"python scripts/style_learn.py --book {args.book}）")
+        return 0
+
+    if args.privacy_scan:
+        privacy_scan(book_dir)
+        return 0
+
+    if args.platform_check:
+        platform_check(book_dir, args.platform_check)
+        return 0
+
+    if args.export_evidence:
+        export_evidence(book_dir, args.export_evidence)
+        return 0
 
     api_key = (
         args.key
@@ -623,16 +1243,6 @@ def main() -> int:
     planner_model = env_or("PLANNER_MODEL", "PLANNER_MODEL", "") or model
     reviewer_model = env_or("REVIEWER_MODEL", "REVIEWER_MODEL", "") or model
 
-    book_dir = os.path.abspath(args.book) if args.book else ""
-    if not book_dir or not os.path.exists(book_dir):
-        print(f"书目录不存在：{book_dir or '（未指定 --book）'}")
-        return 1
-
-    # 书名 = 目录名；章节落在书目录自己的 chapters/ 下（一本书=一个文件夹）
-    book_name = os.path.basename(book_dir.rstrip("/\\"))
-    out_dir = os.path.join(book_dir, "chapters")
-    state_path = os.path.join(book_dir, STATE_FILE)
-
     # 动作一：初始化账本
     if args.init_state:
         print(f"[init] 根据 设定/角色卡/大纲 生成初始 {STATE_FILE} ...")
@@ -648,9 +1258,50 @@ def main() -> int:
             return 1
         return 0
 
+    # ── 免章号动作（v0.8：--deconstruct 回归免章号分支，修复其被 --chapter
+    #    必填检查拦截导致 Web 拆书报错的存量 bug）────────────────────────
+    if args.deconstruct:
+        deconstruct_book(api_key, base_url, model, book_dir,
+                         reasoning_effort=args.reasoning_effort)
+        return 0
+
+    if args.gen_trilogy or args.blueprint:
+        gen_trilogy(api_key, base_url, model, book_dir,
+                    reasoning_effort=args.reasoning_effort)
+        return 0
+
+    if args.recalc_from:
+        rep = recalc_from(book_dir, args.recalc_from,
+                          update_fn=lambda body, old: update_state(
+                              api_key, base_url, model, body, old,
+                              reasoning_effort=args.reasoning_effort,
+                              usage_meta={"action": usage_log.ACTION_LEDGER_RECALC, "book": book_name}))
+        return 1 if rep.get("interrupted") else 0
+
     if args.chapter < 1:
         print("请指定 --chapter N（写第 N 章），或 --init-state 初始化账本")
         return 1
+
+    # ── v0.9 章级扩展动作（N 是参数值，前面已越过 chapter 必填检查，防同款不可达 bug）──
+    if args.cross_audit:
+        cross_audit(book_dir, args.cross_audit, reasoning_effort=args.reasoning_effort)
+        return 0
+
+    if args.outline_check:
+        outline_check(api_key, base_url, planner_model, book_dir, args.outline_check,
+                      reasoning_effort=args.reasoning_effort)
+        return 0
+
+    if args.beta_reader:
+        beta_reader(api_key, base_url, model, book_dir, args.beta_reader,
+                    reasoning_effort=args.reasoning_effort)
+        return 0
+
+    # 动作：6 维评分（v0.9.2 回补，提示词走插件链，停用即拒）
+    if args.score:
+        score_chapter(api_key, base_url, model, book_dir, args.score,
+                      reasoning_effort=args.reasoning_effort)
+        return 0
 
     # 动作：一致性审计（只读，不改账本与正文；审校角色可用独立模型）
     if args.audit:
@@ -680,10 +1331,13 @@ def main() -> int:
             return 1
         old_state = read_text(state_path)
         body = read_text(src)
+        _w = state_size_warning(old_state)  # R45：账本过大只提醒不阻断
+        if _w:
+            print(_w, file=sys.stderr)
         print(f"[state] 基于 ch{args.chapter:03d}.md（{len(body)} 字）重算账本...")
         new_state = update_state(api_key, base_url, model, body,
                                  old_state, reasoning_effort=args.reasoning_effort,
-                                 usage_meta={"action": "账本更新", "book": book_name,
+                                 usage_meta={"action": usage_log.ACTION_LEDGER, "book": book_name,
                                              "chapter": args.chapter})
         with open(state_path, "w", encoding="utf-8") as f:
             f.write(new_state)
@@ -704,7 +1358,8 @@ def main() -> int:
     print(f"[2/4] 调用 {model} 生成正文...")
     body = call_llm(api_key, base_url, model, context,
                     reasoning_effort=args.reasoning_effort,
-                    usage_meta={"action": "写正文", "book": book_name, "chapter": args.chapter})
+                    usage_meta={"action": usage_log.ACTION_WRITE, "book": book_name,
+                                "chapter": args.chapter})
     body = body.strip()
 
     out_file = os.path.join(out_dir, f"ch{args.chapter:03d}.md")
@@ -720,11 +1375,14 @@ def main() -> int:
               f"可用 --adjust {args.chapter} --target {words} --mode {mode} 校正（Web 端有对应按钮）。")
 
     if not args.no_state:
+        _w = state_size_warning(read_text(state_path))  # R45：账本过大只提醒不阻断
+        if _w:
+            print(_w, file=sys.stderr)
         print("     更新滚动账本（记忆回填）...")
         new_state = update_state(api_key, base_url, model, body,
                                  read_text(state_path),
                                  reasoning_effort=args.reasoning_effort,
-                                 usage_meta={"action": "账本更新", "book": book_name,
+                                 usage_meta={"action": usage_log.ACTION_LEDGER, "book": book_name,
                                              "chapter": args.chapter})
         with open(state_path, "w", encoding="utf-8") as f:
             f.write(new_state)

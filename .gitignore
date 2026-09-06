@@ -22,8 +22,7 @@ __pycache__/
 .venv/
 venv/
 
-# 用户书稿数据（本地私有）：章节正文与一切机器产物不入库
-**/chapters/
+# 书稿机器产物不入库；但章节正文必须入库（2026-09-05 数据事故教训：书稿必须随仓库走）
 *.bak.md
 books/*/versions/
 
@@ -38,6 +37,8 @@ books/_archive/
 # 本地调研/测试脚本（不上传）
 _research/
 
-# 用户自建书不入库（仓库只带官方示例书 雾城档案 与模板 sample_book）
+# 用户自建书不入库（仓库只带官方书 雾城档案/雁回刀 与模板）
 books/*
 !books/雾城档案/
+!books/雁回刀/
+!books/_templates/

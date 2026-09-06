@@ -1,0 +1,6 @@
+{
+  "name": "publish-check",
+  "version": "1.0",
+  "description": "发布体检：红线初筛+钩子检查+合规审读，蒸馏自 tomato-pass",
+  "enabled": true
+}

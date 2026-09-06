@@ -1,12 +1,12 @@
 import React, { useEffect, useRef, useState } from "react";
-import { api, apiPut } from "../api.js";
+import { api, apiPost, apiPut } from "../api.js";
 
 /* AI 助手：全局对话页——可选一本书作为上下文，聊剧情/查矛盾/改稿。
    改稿：选中章节后，AI 的回复可一键替换该章正文（有确认）。
    会话持久化 sessionStorage（切页/刷新不丢）。 */
 
 const SS_KEY = "nl_assistant_v1";
-const HELLO = "我是你的写作助手。选一本书（或直接聊），可以让我：总结剧情 / 查前后矛盾 / 给后续章节点子 / 重写某一段 / 把你的想法整理成设定。";
+const HELLO = "我是你的写作助手。选一本书（或直接聊），可以让我：总结剧情 / 查前后矛盾 / 给后续章节点子 / 重写某一段 / 把你的想法整理成设定。也可以直接下指令：交叉审计第 N 章 / 重算账本 / 平台自检 / 读者试读 / 导出证据包。";
 
 function loadState() {
   try {
@@ -17,6 +17,25 @@ function loadState() {
 }
 
 const QUICK = ["用三句话总结目前已写的剧情", "检查已写章节有没有前后矛盾，列出来", "给下一章出 3 个可行的剧情方向", "目前哪些伏笔拖太久了？怎么收？"];
+
+/* v0.9 意图路由：命中关键词直接调引擎端点（不进聊天流），风险动作先 confirm */
+const INTENTS = [
+  { re: /交叉审计|交叉核验/, ep: "cross-audit", label: "交叉审计", risk: false },
+  { re: /重算账本|账本重算|重算/, ep: "recalc-from", label: "重算账本", risk: true },
+  { re: /平台自检|平台检查|平台适配/, ep: "platform-check", label: "平台自检", risk: false },
+  { re: /读者试读|试读反馈|试读/, ep: "beta-reader", label: "读者试读", risk: false },
+  { re: /导出证据|证据包/, ep: "export-evidence", label: "导出证据包", risk: true },
+];
+
+function parseIntent(text) {
+  for (const it of INTENTS) {
+    if (it.re.test(text)) {
+      const m = text.match(/第\s*(\d+)\s*章/) || text.match(/(\d{1,4})\s*章/);
+      return { ...it, no: m ? parseInt(m[1]) : null };
+    }
+  }
+  return null;
+}
 
 export default function Assistant({ go }) {
   const saved = loadState();
@@ -68,9 +87,37 @@ export default function Assistant({ go }) {
     return "你是这本书的写作助手。下方是书籍资料，回答要贴合已设定的事实，不得编造与资料矛盾的设定。\n\n" + parts.join("\n\n");
   }
 
+  // 意图路由：命中 v0.9 操作词 → 直接调引擎端点并把输出贴回对话
+  async function runIntent(intent, text) {
+    const say = (content) => setMsgs((m) => [...m, { role: "assistant", content }]);
+    if (!book) { say(`（请先在上方选择一本书，再使用「${intent.label}」）`); return; }
+    const no = intent.no || parseInt(ch) || (chapters.length ? chapters[chapters.length - 1].no : null);
+    if (!no) { say(`（无法确定章号：请在指令里带上章号，例如「${intent.label}第 3 章」，或先在上方选中一章）`); return; }
+    if (intent.risk && !confirm(`「${intent.label}」对《${book}》从第 ${no} 章起执行，可能改写账本/生成产物。继续？`)) return;
+    setMsgs((m) => [...m, { role: "user", content: text }, { role: "assistant", content: "" }]);
+    setStreaming(true);
+    try {
+      const d = await apiPost(`/api/book/${encodeURIComponent(book)}/${intent.ep}`, { no }, { timeout: 0 });
+      const out = (d && (d.log || d.report || d.content)) || (typeof d === "string" ? d : "") || "（引擎无输出）";
+      setMsgs((m) => {
+        const c = [...m];
+        c[c.length - 1] = { role: "assistant", content: `【${intent.label} · 第 ${no} 章】\n${out}` };
+        return c;
+      });
+    } catch (e) {
+      setMsgs((m) => {
+        const c = [...m];
+        c[c.length - 1] = { role: "assistant", content: `（${intent.label}失败：${e.message}）` };
+        return c;
+      });
+    } finally { setStreaming(false); }
+  }
+
   async function send(text) {
     const t = (text || input).trim();
     if (!t || streaming) return;
+    const intent = parseIntent(t);
+    if (intent) { setInput(""); await runIntent(intent, t); return; }
     setInput(""); setStreaming(true);
     const next = [...msgs, { role: "user", content: t }, { role: "assistant", content: "" }];
     setMsgs(next);
@@ -84,18 +131,27 @@ export default function Assistant({ go }) {
       });
       if (!r.ok) throw new Error("HTTP " + r.status);
       const reader = r.body.getReader(), dec = new TextDecoder();
-      let buf = "";
+      let buf = "", ev = "";
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
         buf += dec.decode(value, { stream: true });
         const parts = buf.split("\n"); buf = parts.pop();
         for (const ln of parts) {
+          if (ln.startsWith("event: ")) { ev = ln.slice(7).trim(); continue; }
           if (!ln.startsWith("data: ")) continue;
-          try {
-            const delta = (((JSON.parse(ln.slice(6)).choices || [{}])[0]).delta || {}).content || "";
+          let v;
+          try { v = JSON.parse(ln.slice(6)); } catch (e) { continue; }
+          // 帧契约：delta 帧 data 是 JSON 字符串（"文字块"）；done 是空对象；error 帧是错误文本
+          if (ev === "error") {
+            setMsgs((m) => { const c = [...m]; c[i] = { ...c[i], content: "（调用失败：" + (typeof v === "string" ? v : (v && v.error) || "未知错误") + "）" }; return c; });
+          } else if (typeof v === "string") {
+            if (v) setMsgs((m) => { const c = [...m]; c[i] = { ...c[i], content: c[i].content + v }; return c; });
+          } else {
+            const delta = (((v.choices || [{}])[0]).delta || {}).content || "";
             if (delta) setMsgs((m) => { const c = [...m]; c[i] = { ...c[i], content: c[i].content + delta }; return c; });
-          } catch (e) {}
+          }
+          ev = "";
         }
       }
     } catch (e) {

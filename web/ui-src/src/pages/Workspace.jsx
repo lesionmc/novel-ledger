@@ -1,5 +1,9 @@
 import React, { useEffect, useRef, useState } from "react";
-import { api, apiPost, apiPut, usageFromLog, fmt } from "../api.js";
+import { api, apiPost, apiPut, apiPutJson, usageFromLog, fmt } from "../api.js";
+import {
+  useMode, setMode, getRailBook, setRailBook, getRailChapter, setRailChapter, subscribe,
+} from "../uiStore.js";
+import { PanelGroup, Panel, PanelResizeHandle } from "react-resizable-panels";
 
 /* 章节与账本页（工作台核心）：书树 | 编辑器/报告 | 动作面板 */
 
@@ -25,6 +29,9 @@ export default function Workspace({ autoOpen = null }) {
   const [preview, setPreview] = useState(false); // 编辑器 md 预览模式
   const [liveLines, setLiveLines] = useState([]); // 写章实时直播日志
   const liveRef = useRef(null);
+  const appliedBook = useRef("");   // 书内导航：已应用的书（防重复打开）
+  const appliedCh = useRef("");     // 书内导航：已应用的章（防重复打开）
+  const mode = useMode();           // Workspace 双模式：simple / pro
 
   useEffect(() => { api("/api/books").then((r) => setBooks(r.books)).catch(() => {}); }, []);
 
@@ -37,6 +44,17 @@ export default function Workspace({ autoOpen = null }) {
   useEffect(() => {
     if (autoOpen && !book && books.includes(autoOpen)) openBook(autoOpen);
   }, [autoOpen, books]);
+
+  // 书内导航（BookRail）：监听 uiStore 的书/章变化，驱动本页打开。用 ref 防重复打开。
+  useEffect(() => subscribe(() => {
+    const rb = getRailBook();
+    const rc = getRailChapter();
+    if (rb && rb !== appliedBook.current) { appliedBook.current = rb; openBook(rb); }
+    const rcNum = rc ? Number(rc) : null;
+    if (rb && rb === book && rcNum && String(rcNum) !== String(appliedCh.current)) {
+      appliedCh.current = String(rcNum); openSel({ kind: "ch", no: rcNum });
+    }
+  }), [book]);
 
   async function openBook(name) {
     setBook(name); setSel(null); setBody(""); setLog("");
@@ -52,6 +70,7 @@ export default function Workspace({ autoOpen = null }) {
 
   async function openSel(s) {
     setSel(s); setLog(""); setMsg("");
+    if (s.kind === "ch") { appliedCh.current = String(s.no); setRailChapter(s.no); }
     try {
       if (s.kind === "ch") setBody((await api(`/api/book/${encodeURIComponent(book)}/ch/${s.no}`)).content);
       else if (s.kind === "doc") setBody((await api(`/api/book/${encodeURIComponent(book)}/doc/${s.doc}`)).content);
@@ -71,7 +90,8 @@ export default function Workspace({ autoOpen = null }) {
   }
 
   async function run(action, fn) {
-    if (busy) return;
+    if (busyRef.current) return;
+    busyRef.current = true;
     if (sel && sel.kind === "ch") await save().catch(() => {});
     setBusy(action); setLog(""); setMsg("");
     try {
@@ -84,7 +104,7 @@ export default function Workspace({ autoOpen = null }) {
       if (action === "去味精判") { setSel({ kind: "report", file: `chapters/ch${String(d.no).padStart(3, "0")}.AI腔体检.md` }); }
       if (action === "应用改写") { await openBook(book); setSel({ kind: "ch", no: d.no || (sel && sel.no) }); }
     } catch (e) { setMsg(`${action}失败：${e.message}`); }
-    finally { setBusy(""); }
+    finally { busyRef.current = false; setBusy(""); }
   }
 
 
@@ -121,7 +141,7 @@ export default function Workspace({ autoOpen = null }) {
       setMsg(`ch${String(d.no).padStart(3, "0")} 章纲已落盘，请确认（R32 闸口）`);
       await openBook(book);
     } catch (e) { setMsg("出章纲失败：" + e.message); }
-    finally { setBusy(""); }
+    finally { busyRef.current = false; setBusy(""); }
   }
 
   async function savePlan() {
@@ -166,8 +186,10 @@ export default function Workspace({ autoOpen = null }) {
     return final;
   }
 
-  // 写单章（含直播），完成后刷新书与编辑器
-  async function writeOne(no, words) {
+  // 写单章（含直播），完成后刷新书与编辑器。force=true 供批量连写复用（锁由 runBatch 持有）
+  async function writeOne(no, words, force = false) {
+    if (!force && busyRef.current) return { ok: false };
+    busyRef.current = true;
     setLiveLines([]);
     setBusy("写下一章"); setLog(""); setMsg("");
     try {
@@ -187,19 +209,24 @@ export default function Workspace({ autoOpen = null }) {
     } catch (e) {
       setBusy(""); setMsg("写章失败：" + e.message);
       return { ok: false };
-    }
+    } finally { if (!force) busyRef.current = false; }
   }
 
   // 批量连写：从 start 起连写 count 章，每章 words 字（逐章走实时流）
   async function runBatch(start, count, words) {
+    if (busyRef.current) return;
+    busyRef.current = true;
     setBatch((b) => ({ ...b, running: true, done: 0, fail: 0, current: start }));
     let fail = 0;
     for (let i = 0; i < count; i++) {
       setBatch((b) => ({ ...b, current: start + i, done: i }));
+      busyRef.current = false; // 逐章让 writeOne 自行加锁（期间窗口由 running 弹窗挡连点）
       const r = await writeOne(start + i, words);
+      busyRef.current = true;
       if (!r.ok) fail += 1;
       setBatch((b) => ({ ...b, done: i + 1, fail }));
     }
+    busyRef.current = false;
     setBusy("");
     setMsg(`✅ 批量写章完成：成功 ${count - fail}/${count} 章` + (fail ? `（${fail} 章失败，详见直播日志）` : " ✅"));
     setTimeout(() => setBatch(null), 900);
@@ -221,15 +248,28 @@ export default function Workspace({ autoOpen = null }) {
   }
 
   const chapterNo = sel && sel.kind === "ch" ? sel.no : null;
+  // v0.9 操作的默认章号：优先当前选中章，否则取最新一章
+  const lastNo = info && info.chapters.length ? info.chapters[info.chapters.length - 1].no : null;
+  const opNo = chapterNo || lastNo;
+  const recalc = () => {
+    const n = prompt("账本重算会从指定章起重新生成记忆账本（后面的章全部重算）。从第几章开始？", opNo || 1);
+    if (n) return run("账本重算", () => apiPost(`/api/book/${encodeURIComponent(book)}/recalc-from`, { no: parseInt(n) || 1 }));
+  };
   const actions = [
-    { label: "写下一章", primary: true, fn: () => setBatch({ start: info?.next_no || 1, count: 1, words: 3000 }), need: null },
+    { label: "写下一章", primary: true, core: true, fn: () => setBatch({ start: info?.next_no || 1, count: 1, words: 3000 }), need: null },
     { label: "出章纲+试写", fn: genOutline, need: null },
-    { label: "备份全书", fn: doBackup, need: null },
+    { label: "备份全书", core: true, fn: doBackup, need: null },
     { label: "导出全书 txt", fn: () => { window.open(`/api/book/${encodeURIComponent(book)}/export`, "_blank"); }, need: null },
     { label: "一致性审计", fn: () => run("一致性审计", () => apiPost(`/api/book/${encodeURIComponent(book)}/audit`, { no: chapterNo })), need: "ch" },
     { label: "全书体检", fn: () => run("全书体检", () => apiPost(`/api/book/${encodeURIComponent(book)}/scan`, {})), need: null },
     { label: "去味精判", fn: () => run("去味精判", () => apiPost(`/api/book/${encodeURIComponent(book)}/polish`, { no: chapterNo })), need: "ch" },
     { label: "应用改写", fn: () => { if (confirm("应用改写会修改正文（自动备份到 .bak.md）。继续？")) return run("应用改写", () => apiPost(`/api/book/${encodeURIComponent(book)}/apply`, { no: chapterNo })); }, need: "ch" },
+    // v0.9：交叉审计 / 账本重算 / 平台自检 / 读者试读 / 导出证据包
+    { label: "交叉审计", fn: () => run("交叉审计", () => apiPost(`/api/book/${encodeURIComponent(book)}/cross-audit`, { no: opNo })), need: null },
+    { label: "账本重算", fn: recalc, need: null },
+    { label: "平台自检", fn: () => run("平台自检", () => apiPost(`/api/book/${encodeURIComponent(book)}/platform-check`, { no: opNo })), need: null },
+    { label: "读者试读", fn: () => run("读者试读", () => apiPost(`/api/book/${encodeURIComponent(book)}/beta-reader`, { no: opNo })), need: null },
+    { label: "导出证据包", fn: () => { if (confirm("导出证据包会汇总审计/日志等创作痕迹产物到 evidence/，继续？")) return run("导出证据包", () => apiPost(`/api/book/${encodeURIComponent(book)}/export-evidence`, { no: opNo })); }, need: null },
   ];
 
   function title() {
@@ -254,9 +294,9 @@ export default function Workspace({ autoOpen = null }) {
         </div>
       )}
 
-      <div className="grid grid-cols-12 gap-4">
+      <PanelGroup direction="horizontal" autoSaveId="ws-panels" className="gap-4">
         {/* 左：书/章节/产物 树（分组可折叠，章节显示「N 标题」） */}
-        <div className="col-span-3 rounded-xl border border-line bg-panel p-3 shadow-sm">
+        <Panel defaultSize={25} minSize={15} className="rounded-xl border border-line bg-panel p-3 shadow-sm">
           <div className="mb-1 flex items-center justify-between text-xs font-semibold text-inksoft">
             我的书
             {book && <button onClick={renameBook} className="text-[11px] font-normal text-inksoft hover:text-ink">重命名</button>}
@@ -314,10 +354,12 @@ export default function Workspace({ autoOpen = null }) {
               )}
             </>
           )}
-        </div>
+        </Panel>
+
+        <PanelResizeHandle className="w-1.5 rounded bg-line transition hover:bg-brand2/50" />
 
         {/* 中：编辑器/报告 */}
-        <div className="col-span-6 rounded-xl border border-line bg-panel p-3 shadow-sm">
+        <Panel defaultSize={50} minSize={30} className="rounded-xl border border-line bg-panel p-3 shadow-sm">
           <div className="mb-2 flex items-center justify-between">
             <div className="text-sm font-semibold">{title()}</div>
             <div className="flex items-center gap-1.5">
@@ -351,18 +393,26 @@ export default function Workspace({ autoOpen = null }) {
             <div className="flex h-[62vh] items-center justify-center text-sm text-inksoft">← 先选一本书，再选章节或文档</div>
           )}
           {log && (
-            <details className="mt-2 rounded-lg border border-line bg-topbar p-2 text-xs text-[#d5d9e0]">
+            <details className="mt-2 rounded-lg border border-line bg-topbar p-2 text-xs text-topbarfg">
               <summary className="cursor-pointer text-inksoft">引擎日志</summary>
               <pre className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap font-mono">{log}</pre>
             </details>
           )}
-        </div>
+        </Panel>
+
+        <PanelResizeHandle className="w-1.5 rounded bg-line transition hover:bg-brand2/50" />
 
         {/* 右：动作面板 */}
-        <div className="col-span-3 rounded-xl border border-line bg-panel p-3 shadow-sm">
-          <div className="mb-2 text-xs font-semibold text-inksoft">动作</div>
+        <Panel defaultSize={25} minSize={15} className="rounded-xl border border-line bg-panel p-3 shadow-sm">
+          <div className="mb-2 flex items-center justify-between">
+            <span className="text-xs font-semibold text-inksoft">动作</span>
+            <button onClick={() => setMode(mode === "simple" ? "pro" : "simple")}
+              className="rounded-md border border-line px-2 py-0.5 text-[11px] text-inksoft transition hover:border-brand2 hover:text-brand">
+              {mode === "simple" ? "🔧 专业模式" : "🎯 简易模式"}
+            </button>
+          </div>
           <div className="flex flex-col gap-2">
-            {actions.map((a) => {
+            {actions.filter((a) => mode === "simple" ? a.core : true).map((a) => {
               const disabled = !!busy || !book || (a.need === "ch" && !chapterNo);
               return (
                 <button key={a.label} onClick={a.fn} disabled={disabled}
@@ -378,7 +428,7 @@ export default function Workspace({ autoOpen = null }) {
     </div>
   )}
   {busy && liveLines.length > 0 && (
-    <div ref={liveRef} className="mt-2 h-48 overflow-auto rounded-lg bg-topbar p-2 font-mono text-[11px] leading-5 text-[#c7cdd8]">
+    <div ref={liveRef} className="mt-2 h-48 overflow-auto rounded-lg bg-topbar p-2 font-mono text-[11px] leading-5 text-topbarfg">
       {liveLines.map((l, i) => (
         <div key={i} className={l.includes("⚠") ? "text-warn" : l.includes("用量") ? "text-ok" : ""}>{l}</div>
       ))}
@@ -427,7 +477,7 @@ export default function Workspace({ autoOpen = null }) {
                 {batch.running ? (
                   <>
                     <h3 className="mb-3 text-sm font-bold text-ink">批量写章中…</h3>
-                    <div className="mb-3 h-2 overflow-auto rounded-full bg-line">
+                    <div className="mb-3 h-2 overflow-hidden rounded-full bg-line">
                       <div className="h-full bg-brand transition-all" style={{ width: `${Math.round((batch.done / batch.count) * 100)}%` }} />
                     </div>
                     <div className="text-[13px] text-inksoft">
@@ -464,8 +514,8 @@ export default function Workspace({ autoOpen = null }) {
               </div>
             </div>
           )}
-        </div>
-      </div>
+        </Panel>
+      </PanelGroup>
     </div>
   );
 }

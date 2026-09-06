@@ -72,6 +72,12 @@ books/我的书/
 | `--words N` | R31 目标字数（1000–10000 默认 3000），超 ±30% 仅提醒；Web 端有一键加长/精简（`--adjust`） |
 | `--plan` | R32 闸口：按配方出第 N 章「章纲+200 字试写」，落盘 `chapters/chXXX.章纲.md`；写章时自动注入并强制遵循 |
 | `--adjust --target W --mode expand\|shrink` | R31 一键加长/精简第 N 章（先自动备份 .bak.md） |
+| `--recalc-from N` | R49 从 chNNN 快照起逐章重算账本，产出重算报告（冲突列表） |
+| `--cross-audit N` | R42 用备用通道（FALLBACK_*）交叉审计第 N 章 → `chNNN.一致性审计-交叉.md` |
+| `--platform-check N` | R41 零 token 平台自检：红灯清单 + 痕迹统计（免 API key） |
+| `--export-evidence N` | R46 自证证据包（账本+快照+体检单+审计+自检）zip 到 backups/（零 token） |
+| `--outline-check N` | 章纲评估：LLM 审 `chNNN.章纲.md` 质量 |
+| `--beta-reader N` | R43 LLM 以读者视角给第 N 章反馈 → `chNNN.读者反馈.md` |
 
 > **备用模型自动切换**：主模型连续失败后，引擎自动改用 `.env` 里配置的
 > `FALLBACK_API_KEY / FALLBACK_BASE_URL / FALLBACK_MODEL`（防单点故障，详见 `.env.example`）。
@@ -83,6 +89,21 @@ books/我的书/
 | `--scan <书目录>` | L1 词表硬筛全书：AI 腔指数 + 命中清单 + 跨章意象提示（本地跑，零 token） |
 | `--polish <书目录> --chapter N` | L2 AI 精判单章：出人读报告 + 机读 diff JSON（不改正文） |
 | `--apply <书目录> --chapter N` | 按 diff 应用改写：**自动备份原稿**到 `.bak.md`，只改 hard 级病句 |
+| `--book <书目录> --compare N` | R44 去味对比：改前 `.bak.md` vs 改后 L1 指数差值报告（零 token） |
+
+### 体检引擎 `scripts/checkup.py`
+
+| 命令 | 作用 |
+|---|---|
+| `--book <书目录> --chapter N --full` | 三步全跑：一致性审计（调模型）+ AI 腔 L1 评估 + 发布前检查（后两步零 token） |
+| `--audit` / `--evaluate` / `--publish-check` | 单跑一步（均需 `--book` 与 `--chapter`） |
+
+### 文风与图谱 `scripts/style_learn.py` / `scripts/relation_graph.py`
+
+| 命令 | 作用 |
+|---|---|
+| `style_learn.py --book <书目录> [--chapters N]` | 通读样章归纳文风指纹 → `文风指纹.md`（写章时注入，保持手感一致） |
+| `relation_graph.py --book <书目录>` | 依据账本生成人物关系图谱 → `关系图谱.json` + `关系图谱.md`（Web「图谱与文风」页可视化） |
 
 > **安全原则**：`--apply` 只自动应用「hard 级硬伤」（如"夜色如墨""说不清道不明"这类几乎必腔的），改写前自动备份；soft 级文风问题（副词高频、破折号密度、意象复用）只出报告和示范建议，交给作者人工斟酌。
 
@@ -162,10 +183,10 @@ AI 负责起草、自查、改写建议、记忆回填；人在闸口：定大�
 - [x] **P1** 记忆中枢：滚动状态账本（一本书零穿帮连写 6 章示例）
 - [x] **P1** 去 AI 味引擎：检测（scan/polish）+ 安全应用（apply）+ 红线预防
 - [x] **工程配套**：多模型 failover、账本一致性审计（--audit）、零依赖冒烟测试（47 断言）+ Web 路由验收（21 断言）
-- [x] **Web 工作台（本地）**：`web/server.py`（标准库 HTTP + JSON API）+ 三栏前端；书树/章节/报告浏览、正文编辑、写下一章、审计、去味、应用改写、AI 建书向导、⚙ 设置页、SSE 流式对话。启动：`start-web.bat` 或 `python web/server.py --port 8801`。**v0.2 起界面转正**：`http://127.0.0.1:8801/` = React 工作台（首页工作台/章节与账本三栏/用量统计/AI 建书向导/快照底账/伏笔账本/设置）；旧版三栏界面保留在 `/legacy` 供回退。源码在 `web/ui-src/`（Vite+Tailwind，改前端需 Node 构建），构建产物 `web/ui/` 随仓库分发——**用户仍零依赖**
-- [ ] **v0.2（backlog，详见 docs/02 R31-R35）**：章节字数软控、提纲闸口（含 200 字试写）、一键备份、伏笔状态机 + 超期告警、Web E2E
-- [ ] **v0.3（backlog，docs/02 R36-R42）**：向量层可选插件、账本分段摘要、拆书续写、学自己文风、关系图谱、平台视角 AI 味自检、异构第二模型审计
-- [ ] **v0.4+（backlog，docs/02 R43-R44 等）**：模拟读者试读、去味前后对比分、轻量卡片化、技能模板系统
+- [x] **Web 工作台（本地）**：`web/server.py`（标准库 HTTP + JSON API）+ 三栏前端；书树/章节/报告浏览、正文编辑、写下一章、审计、去味、应用改写、AI 建书向导、⚙ 设置页、SSE 流式对话。启动：`start-web.bat` 或 `python web/server.py --port 8801`。**v0.2 起界面转正**：`http://127.0.0.1:8801/` = React 工作台（首页工作台/章节与账本三栏/用量统计/AI 建书向导/快照底账/伏笔账本/设置/**图谱与文风**）；旧版三栏界面保留在 `/legacy` 供回退。源码在 `web/ui-src/`（Vite+Tailwind，改前端需 Node 构建），构建产物 `web/ui/` 随仓库分发——**用户仍零依赖**
+- [x] **v0.2**：章节字数软控（R31）、提纲闸口（R32）、一键备份（R34）、伏笔状态机 + 超期告警（R35）
+- [x] **v0.3-v0.8**：向量层可选插件、拆书续写、学自己文风、关系图谱、平台视角 AI 味自检（R41）、异构第二模型交叉审计（R42）、模拟读者试读（R43）、去味前后对比（R44）、提示词可视化编辑、连写任务中心
+- [x] **v0.9.1（数据事故恢复版）**：9/5 项目目录整体删除后凭备份 + 会话记忆重建 v0.6/v0.7 与当日改动；账本重算（R49）、证据包导出（R46）、Web 端 SSE 流式 + 安全修复收口
 - [ ] **P2** 发布体检（连载节奏、读者反馈回收）
 - [ ] **P3** 手机审稿 / 多端同步
 - [ ] 新书模板库 / 大纲共创向导

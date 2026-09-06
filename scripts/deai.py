@@ -8,14 +8,17 @@
   L1 词表硬筛（本地跑，零 token）：黑名单词 + 标点密度 + 跨章意象重复，出 AI 腔指数
   L2 AI 精判（调模型）：只喂命中句 + 局部上下文，逐句判定「真 AI 腔 / 正常表达」+ 给改写建议
 
-工作流（先报告后应用，不改原文）：
+工作流（先报告后应用，--apply 前自动备份原稿）：
   --scan    <书目录>               全书体检，控制台出指数报告（不烧 token）
-  --polish <书目录> --chapter N    单章 AI 精判，落盘 chXXX.AI腔体检.md（不改正文）
-  （--apply 应用改写：留待人工看完报告后下一步再做）
+  --polish <书目录> --chapter N    单章 AI 精判，落盘 chXXX.AI腔体检.md + diff JSON（不改正文）
+  --apply   <书目录> --chapter N   按 diff JSON 应用改写（自动备份原稿到 .apply.bak.md）
+  --compare <书目录> --compare N   改前(.bak.md/.apply.bak.md) vs 改后 L1 差值报告（零 token）
 
 用法示例：
   python deai.py --scan "books/雾城档案"
   python deai.py --polish "books/雾城档案" --chapter 5
+  python deai.py --apply "books/雾城档案" --chapter 5
+  python deai.py --compare "books/雾城档案" --compare 5
 
 注意：与 write_chapter.py 同源复用的坑（agnes-2.5-flash 输入 >5k tokens 触发
 reasoning 失控）已规避——L2 只喂命中句局部上下文，不喂全文。
@@ -27,6 +30,9 @@ import re
 import sys
 import time
 import urllib.request
+
+import chapters  # 章节文件命名/枚举的单一事实源（同目录模块）
+import usage_log  # 用量记账常量/流水（R48；同目录模块）
 
 # ---------------------------------------------------------------- 模型配置
 DEFAULT_BASE_URL = "https://apihub.agnes-ai.com/v1/"
@@ -104,8 +110,8 @@ def call_llm(api_key, base_url, model, user_content, temperature=0.2,
                       f"finish={finish}")
                 if usage:
                     try:
-                        import usage_log
                         m = usage_meta or {}
+                        # 「去味」是缺 action 时的兜底默认值（正常路径都是 ACTION_DEAI），一次性冷僻名保留字符串
                         usage_log.log_usage(m.get("action", "去味"), ch_model,
                                             usage.get("prompt_tokens"),
                                             usage.get("completion_tokens"),
@@ -214,12 +220,8 @@ def clean_text(s):
 
 
 def chapter_files(book_dir):
-    ch_dir = os.path.join(book_dir, "chapters")
-    if not os.path.isdir(ch_dir):
-        ch_dir = book_dir  # 兼容直接指到含 chXXX.md 的目录
-    files = sorted((f for f in os.listdir(ch_dir) if re.match(r"^ch\d{3}\.md$", f)),
-                   key=lambda f: int(f[2:5]))  # 按章节号排序，避免 ch010 排在 ch002 前
-    return ch_dir, files
+    ch_dir = chapters.chapter_dir(book_dir)
+    return ch_dir, chapters.list_chapter_files(book_dir)
 
 
 def hit_window(line, word, width=28):
@@ -230,55 +232,63 @@ def hit_window(line, word, width=28):
     return line[max(0, i - width): i + len(word) + width]
 
 
+def l1_scan_single(ch_dir, fname, image_hits=None):
+    """单章 L1 词表硬筛（l1_scan_book 的逐章实现，两者口径必须完全一致：
+    同一套词表/阈值/加权公式，供 --compare 精确对比改前改后单章指标）。"""
+    if image_hits is None:  # 单章独立扫描时意象复用无跨章累积意义，本地兜底
+        image_hits = {}
+    lines = read_text(os.path.join(ch_dir, fname)).splitlines()
+    text = "".join(lines)
+    length = len(clean_text(text))
+    hard_hits = []   # (行号, 词/模式, 类别, 窗口)
+    soft_hits = []
+    dash_n = len(re.findall(r"—{2,}|——", text))
+    ellipsis_n = len(re.findall(r"…{2,}|……", text))
+    for ln, line in enumerate(lines, 1):
+        if not line.strip():
+            continue
+        for word, (cat, weight) in AI_TONE_BLACKLIST.items():
+            if weight == "hard" and word in line:
+                hard_hits.append((ln, word, cat, hit_window(line, word)))
+        for pat, cat in HARD_PATTERNS:
+            m = pat.search(line)
+            if m:
+                hard_hits.append((ln, m.group(0), cat, hit_window(line, m.group(0))))
+        for iw in IMAGE_WORDS:
+            if iw in line:
+                image_hits.setdefault(iw, []).append((fname, ln, hit_window(line, iw)))
+    # soft 词/句式按【全文出现次数】计（同一行堆砌多个也如实计数，跨行跨句都算）
+    for word, (cat, weight) in AI_TONE_BLACKLIST.items():
+        if weight == "soft":
+            n = text.count(word)
+            if n >= SOFT_THRESHOLD:
+                soft_hits.append((word, n, cat))
+    for pat, label in SOFT_PATTERNS:
+        n = len(pat.findall(text))
+        if n >= SOFT_THRESHOLD:
+            soft_hits.append((label, n, "句式高频"))
+    dash_rate = dash_n * 1000 / max(length, 1)
+    ell_rate = ellipsis_n * 1000 / max(length, 1)
+    dash_flag = dash_rate >= DASH_PER_1000
+    ell_flag = ell_rate >= ELLIPSIS_PER_1000
+    score = len(hard_hits) * 2 + len(soft_hits) + dash_flag + ell_flag
+    index = round(score * 1000 / max(length, 1), 1)
+    return {
+        "file": fname, "chars": length,
+        "hard": hard_hits, "soft": soft_hits,
+        "dash": dash_n, "dash_rate": round(dash_rate, 1), "dash_flag": dash_flag,
+        "ellipsis": ellipsis_n, "ell_rate": round(ell_rate, 1), "ell_flag": ell_flag,
+        "score": score, "index": index,
+    }
+
+
 def l1_scan_book(book_dir):
     """L1 词表硬筛全书，返回逐章结果 dict。零 token。"""
     ch_dir, files = chapter_files(book_dir)
     results = []
     image_hits = {}  # 意象词 -> [(章, 行号, 句窗口)]
     for fn in files:
-        lines = read_text(os.path.join(ch_dir, fn)).splitlines()
-        text = "".join(lines)
-        length = len(clean_text(text))
-        hard_hits = []   # (行号, 词/模式, 类别, 窗口)
-        soft_hits = []
-        dash_n = len(re.findall(r"—{2,}|——", text))
-        ellipsis_n = len(re.findall(r"…{2,}|……", text))
-        for ln, line in enumerate(lines, 1):
-            if not line.strip():
-                continue
-            for word, (cat, weight) in AI_TONE_BLACKLIST.items():
-                if weight == "hard" and word in line:
-                    hard_hits.append((ln, word, cat, hit_window(line, word)))
-            for pat, cat in HARD_PATTERNS:
-                m = pat.search(line)
-                if m:
-                    hard_hits.append((ln, m.group(0), cat, hit_window(line, m.group(0))))
-            for iw in IMAGE_WORDS:
-                if iw in line:
-                    image_hits.setdefault(iw, []).append((fn, ln, hit_window(line, iw)))
-        # soft 词/句式按【全文出现次数】计（同一行堆砌多个也如实计数，跨行跨句都算）
-        for word, (cat, weight) in AI_TONE_BLACKLIST.items():
-            if weight == "soft":
-                n = text.count(word)
-                if n >= SOFT_THRESHOLD:
-                    soft_hits.append((word, n, cat))
-        for pat, label in SOFT_PATTERNS:
-            n = len(pat.findall(text))
-            if n >= SOFT_THRESHOLD:
-                soft_hits.append((label, n, "句式高频"))
-        dash_rate = dash_n * 1000 / max(length, 1)
-        ell_rate = ellipsis_n * 1000 / max(length, 1)
-        dash_flag = dash_rate >= DASH_PER_1000
-        ell_flag = ell_rate >= ELLIPSIS_PER_1000
-        score = len(hard_hits) * 2 + len(soft_hits) + dash_flag + ell_flag
-        index = round(score * 1000 / max(length, 1), 1)
-        results.append({
-            "file": fn, "chars": length,
-            "hard": hard_hits, "soft": soft_hits,
-            "dash": dash_n, "dash_rate": round(dash_rate, 1), "dash_flag": dash_flag,
-            "ellipsis": ellipsis_n, "ell_rate": round(ell_rate, 1), "ell_flag": ell_flag,
-            "score": score, "index": index,
-        })
+        results.append(l1_scan_single(ch_dir, fn, image_hits))
     # 跨章意象重复：出现章数 ≥2 且总次 ≥3 提示
     repeat_notes = []
     for iw, hits in image_hits.items():
@@ -423,7 +433,7 @@ def polish_chapter(book_dir, chapter, api_key, base_url, model, reasoning_effort
                    temperature=0.2, max_tokens=6000,
                    reasoning_effort=reasoning_effort,
                    system_prompt=L2_SYSTEM,
-                   usage_meta={"action": "去味精判",
+                   usage_meta={"action": usage_log.ACTION_DEAI,
                                "book": os.path.basename(book_dir.rstrip("/\\")),
                                "chapter": int(chapter)})
     try:
@@ -498,7 +508,9 @@ def polish_chapter(book_dir, chapter, api_key, base_url, model, reasoning_effort
 
 
 def apply_chapter(book_dir, chapter):
-    """按 diff JSON 应用改写：只动 hard 级自动项，替换前自动备份原稿到 .bak.md。"""
+    """按 diff JSON 应用改写：只动 hard 级自动项，替换前自动备份原稿到 .apply.bak.md。
+    备份名带 .apply 前缀的原因：--fix/--adjust 的原稿备份共用 chXXX.bak.md，
+    若去味也写同名文件，第二功能的原稿会被覆盖而无备份（备份必须按功能分离）。"""
     ch_dir, files = chapter_files(book_dir)
     target = f"ch{int(chapter):03d}.md"
     base = target.replace(".md", "")
@@ -514,7 +526,7 @@ def apply_chapter(book_dir, chapter):
     src_path = os.path.join(ch_dir, target)
     raw = read_text(src_path)
     lines = raw.splitlines(keepends=True)  # 保真换行
-    bak_path = os.path.join(ch_dir, f"{base}.bak.md")
+    bak_path = os.path.join(ch_dir, f"{base}.apply.bak.md")
     if not os.path.exists(bak_path):
         with open(bak_path, "w", encoding="utf-8") as f:
             f.write(raw)
@@ -546,21 +558,84 @@ def apply_chapter(book_dir, chapter):
     return 0
 
 
+# ---------------------------------------------------------------- R44 去味对比
+def compare_chapter(book_dir, chapter):
+    """R44 去味对比：改前=chNNN.bak.md（缺则 .apply.bak.md 兜底）、改后=chNNN.md。
+    两版各跑一遍 L1 统计（l1_scan_single，与 --scan 完全同口径），输出差值报告。
+    零 token；只读对比，不改任何文件。返回 (改前结果, 改后结果, 报告文本)。"""
+    ch_dir, files = chapter_files(book_dir)
+    target = f"ch{int(chapter):03d}.md"
+    if target not in files:
+        raise SystemExit(f"找不到 {target}，目录里现有：{', '.join(files) or '（无章节）'}")
+    before_fn = f"ch{int(chapter):03d}.bak.md"
+    if not os.path.exists(os.path.join(ch_dir, before_fn)):  # chapter_files 只列正文件，备份用 exists 探测
+        before_fn = f"ch{int(chapter):03d}.apply.bak.md"
+    if not os.path.exists(os.path.join(ch_dir, before_fn)):
+        raise SystemExit(f"找不到改前备份（{target.replace('.md', '')}.bak.md 或 "
+                         f".apply.bak.md），无从对比——改写前请先保留原稿备份。")
+    rb = l1_scan_single(ch_dir, before_fn)
+    ra = l1_scan_single(ch_dir, target)
+
+    def _hard_words(r):
+        return [w for (_ln, w, _c, _win) in r["hard"]]
+
+    def _soft_words(r):
+        return {w: n for (w, n, _c) in r["soft"]}
+
+    hw_b, hw_a = _hard_words(rb), _hard_words(ra)
+    sw_b, sw_a = _soft_words(rb), _soft_words(ra)
+    cleared = [w for w in set(hw_b) | set(sw_b) if w not in hw_a and w not in sw_a]
+    added = [w for w in set(hw_a) | set(sw_a) if w not in hw_b and w not in sw_b]
+    out = [f"# ch{int(chapter):03d} · 去味对比报告（R44，零 token，口径与 --scan 完全一致）", "",
+           f"- 改前：{before_fn}（{rb['chars']} 字）指数 {rb['index']}"
+           f"（hard×{len(rb['hard'])} / soft高频×{len(rb['soft'])} / "
+           f"破折号×{rb['dash']} / 省略号×{rb['ellipsis']}）",
+           f"- 改后：{target}（{ra['chars']} 字）指数 {ra['index']}"
+           f"（hard×{len(ra['hard'])} / soft高频×{len(ra['soft'])} / "
+           f"破折号×{ra['dash']} / 省略号×{ra['ellipsis']}）",
+           f"- 指数变化：{rb['index']} → {ra['index']}（Δ {round(ra['index'] - rb['index'], 1)}）",
+           f"- 已消除词条：{('、'.join(cleared)) if cleared else '（无）'}",
+           f"- 新增词条：{('、'.join(added)) if added else '（无）'}",
+           "",
+           "> 判读：指数下降且「已消除」包含改写目标词 = 去味生效；"
+           "若改后字数明显膨胀，注意是否为改写引入了新的套路表达。"]
+    report = "\n".join(out)
+    print(report)
+    out_path = os.path.join(ch_dir, f"ch{int(chapter):03d}.去味对比.md")
+    with open(out_path, "w", encoding="utf-8") as f:
+        f.write(report)
+    print(f"[compare] 报告已落盘 → {out_path}")
+    return rb, ra, report
+
+
 # ---------------------------------------------------------------- main
 def main() -> int:
     ap = argparse.ArgumentParser(description="ai-novel-workbench 去 AI 味引擎：L1 词表硬筛 + L2 AI 精判 + 安全应用")
     ap.add_argument("--scan", metavar="BOOK_DIR", help="全书 L1 体检（不烧 token）")
     ap.add_argument("--polish", metavar="BOOK_DIR", help="单章 L2 精判出报告+diff JSON")
-    ap.add_argument("--apply", metavar="BOOK_DIR", help="按 diff JSON 应用改写（自动备份原稿到 .bak.md）")
+    ap.add_argument("--apply", metavar="BOOK_DIR", help="按 diff JSON 应用改写（自动备份原稿到 .apply.bak.md）")
+    ap.add_argument("--book", dest="book_dir", default=None, metavar="BOOK_DIR",
+                    help="书目录（配合 --compare 使用，也可省略——--compare 会复用其他动作传入的书目录）")
+    ap.add_argument("--compare", type=int, default=0, metavar="N",
+                    help="R44 去味对比：改前(chNNN.bak.md/.apply.bak.md) vs 改后(chNNN.md) L1 差值报告（零 token）")
     ap.add_argument("--chapter", type=int, help="配合 --polish / --apply 指定章节号")
     ap.add_argument("--model", default=None, help="模型名（默认读 .env 或 agnes-2.5-flash）")
     ap.add_argument("--base-url", default=None)
     ap.add_argument("--reasoning-effort", default="low")
     args = ap.parse_args()
 
-    if not args.scan and not args.polish and not args.apply:
+    if not args.scan and not args.polish and not args.apply and not args.compare:
         ap.print_help()
         return 1
+
+    # --compare 的书目录：--book 优先，否则复用其他动作带出的书目录（零 token 动作无需 key）
+    if args.compare:
+        book = args.book_dir or args.scan or args.polish or args.apply
+        if not book:
+            print("--compare 需要 --book BOOK_DIR（或复用 --scan/--polish/--apply 传入的书目录）")
+            return 1
+        compare_chapter(book, args.compare)
+        return 0
 
     api_key = env_or("AGNES_API_KEY", "AGNES_API_KEY", "")
     base_url = args.base_url or env_or("AGNES_BASE_URL", "AGNES_BASE_URL", DEFAULT_BASE_URL)

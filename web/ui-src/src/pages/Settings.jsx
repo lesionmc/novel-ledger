@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { api, apiPost } from "../api.js";
+import { api, apiPost, apiPutJson } from "../api.js";
 
 /* 设置页：8 个白名单键读写 + 测试连接（脱敏占位 **** 不回写）
    v0.2.1：Key 状态移入本页；每个配置项加大白话说明；两行式布局 */
@@ -44,7 +44,7 @@ export default function Settings({ go }) {
         const v = (vals[f.key] || "").trim();
         if (v && v !== "****") changes[f.key] = v;  // 脱敏占位符不许写回覆盖真值
       }
-      const r = await api("/api/settings", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ changes }) }).then((x) => x);
+      const r = await apiPutJson("/api/settings", { changes });
       const rr = typeof r === "object" && "key_set" in r ? r : await api("/api/status");
       setKeySet(!!rr.key_set);
       setStatus("已保存 ✅" + (rr.key_set ? "" : "（⚠ 还没配 Key）"));

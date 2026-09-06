@@ -1,0 +1,6 @@
+{
+  "name": "evaluate",
+  "version": "1.0",
+  "description": "六维评分：情节/人物/文笔/世界观/情感/创新，蒸馏自 novel-evaluator",
+  "enabled": true
+}

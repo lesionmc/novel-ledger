@@ -150,13 +150,16 @@ def live_env():
 
 def llm_chat(messages, temperature=0.7, max_tokens=2000, action="Web对话"):
     """用配置的模型做一次 chat（供对话建书/测试连接用）。返回文本。
-    R48：响应带 usage 时顺带记用量流水，记账失败不影响返回。"""
+    R48：响应带 usage 时顺带记用量流水，记账失败不影响返回。
+    max_tokens 下限 800：agnes-2.5-flash 的 reasoning 先于正文消耗预算，
+    预算太小（如 4/100）会被思考吞光返回空 content（docs/16 问题#5）。"""
     from common import set_last_usage
     set_last_usage(None)
     cfg = live_env()
     if not cfg["key"]:
         raise RuntimeError("未配置 AGNES_API_KEY（请在 ⚙ 设置 里填写）")
     import urllib.request as _ur
+    max_tokens = max(int(max_tokens or 0), 800)
     payload = {
         "model": cfg["model"],
         "messages": messages,
@@ -170,8 +173,17 @@ def llm_chat(messages, temperature=0.7, max_tokens=2000, action="Web对话"):
                       headers={"Content-Type": "application/json",
                                "Authorization": "Bearer " + cfg["key"]},
                       method="POST")
-    with _ur.urlopen(req, timeout=240) as resp:
-        data = json.loads(resp.read().decode("utf-8"))
+    # 空响应重试（agnes 偶发思考吞光输出预算返回空，docs/16 问题#5）：最多试 3 次
+    data = {}
+    choice = {}
+    for attempt in range(3):
+        with _ur.urlopen(req, timeout=240) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        choice = (data.get("choices") or [{}])[0]
+        if ((choice.get("message") or {}).get("content") or "").strip():
+            break
+        print(f"  ⚠ [llm_chat] 第 {attempt + 1} 次空响应（finish={choice.get('finish_reason')}），重试...",
+              file=sys.stderr)
     u = data.get("usage") or {}
     if u:
         set_last_usage({"in": u.get("prompt_tokens") or 0,

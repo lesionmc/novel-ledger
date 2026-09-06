@@ -185,7 +185,8 @@ def _log_stream_ms(model, elapsed_ms):
 
 def chat_stream(messages, *, model=None, base_url=None, api_key=None,
                 max_retries=1, fallback_key=None, fallback_base_url=None,
-                fallback_model=None, temperature=None, max_tokens=None, timeout=240):
+                fallback_model=None, temperature=None, max_tokens=None, timeout=240,
+                reasoning_effort="low"):
     """流式对话生成器：yield 文本增量。
 
     - 失败语义（仅限首 token 前）：线性退避 attempt*5 秒重试 max_retries 次，
@@ -193,6 +194,8 @@ def chat_stream(messages, *, model=None, base_url=None, api_key=None,
       显式参数 > FALLBACK_API_KEY / FALLBACK_BASE_URL / FALLBACK_MODEL。
     - 已吐字后中断：StreamInterrupted 直接上抛，不重试、不切备用。
     - 主/备都失败：抛 RuntimeError 汇总最后一次错误。
+    - reasoning_effort 默认 low：agnes-2.5-flash 带推理，不加会把输出预算
+      吞光返回空流（实测 0 chunk→StopIteration→前端 502）。
     """
     model = model or env_or("AGNES_MODEL", "AGNES_MODEL", DEFAULT_MODEL)
     base_url = base_url or env_or("AGNES_BASE_URL", "AGNES_BASE_URL", DEFAULT_BASE_URL)
@@ -207,6 +210,8 @@ def chat_stream(messages, *, model=None, base_url=None, api_key=None,
         payload["temperature"] = temperature
     if max_tokens is not None:
         payload["max_tokens"] = max_tokens
+    if reasoning_effort and reasoning_effort != "none":
+        payload["reasoning_effort"] = reasoning_effort  # 抑制推理吞预算（docs/16 问题#5）
 
     channels = [(api_key, base_url, model, "主通道")]
     if fb_key and fb_model:

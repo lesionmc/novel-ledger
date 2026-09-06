@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from "react";
+﻿import React, { useEffect, useRef, useState } from "react";
 import { api, apiPost, apiPut } from "../api.js";
 
 /* AI 助手 · WorkBuddy/Codex 风格会话工作台
@@ -160,7 +160,7 @@ export default function Assistant({ go }) {
         body: JSON.stringify({ stream: true, temperature: 0.7, max_tokens: 4000, messages: [sys, ...msgs.slice(0, -1)] }),
         signal: ctl.signal,
       });
-      if (!r.ok) throw new Error("HTTP " + r.status);
+      if (!r.ok) throw new Error(r.status === 502 ? "上游模型波动，请点重试（已自动多次尝试）" : "HTTP " + r.status);
       const reader = r.body.getReader(), dec = new TextDecoder();
       let buf = "", ev = "";
       while (true) {

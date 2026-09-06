@@ -63,7 +63,8 @@ def chat_stream(h, msgs, temperature, max_tokens=2000):
         return
     s = srv.read_settings()
     kw = {"model": cfg["model"], "base_url": cfg["base_url"], "api_key": cfg["key"],
-          "temperature": temperature, "max_tokens": max_tokens}
+          "temperature": temperature, "max_tokens": max_tokens,
+          "max_retries": 2}  # 上游偶发空响应/波动：首 token 前共 4 次尝试再报错
     if s.get("FALLBACK_API_KEY"):
         kw["fallback_key"] = s["FALLBACK_API_KEY"]
     if s.get("FALLBACK_BASE_URL"):

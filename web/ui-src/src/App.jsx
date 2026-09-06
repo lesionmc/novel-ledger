@@ -21,24 +21,49 @@ import { useTasks, startTaskPolling } from "./tasksStore.js";
 /* novel-ledger · React 工作台
    观感对齐 AI-Novel-Writing-Assistant：深藏青顶栏 + 白侧栏 + 浅灰工作台。 */
 
+/* 线性描边图标（stroke 风格，对齐主流工具侧栏；不用 emoji） */
+const ICON_PATHS = {
+  home: <><path d="M3 10.5 12 3l9 7.5" /><path d="M5.5 9.5V20h13V9.5" /></>,
+  chat: <><path d="M4 5.5h16v11H9l-5 4v-15Z" /></>,
+  book: <><path d="M4 4.5h7a2 2 0 0 1 2 2V20a2.5 2.5 0 0 0-2.5-2H4v-13.5Z" /><path d="M20 4.5h-7a2 2 0 0 0-2 2V20a2.5 2.5 0 0 1 2.5-2H20v-13.5Z" /></>,
+  target: <><circle cx="12" cy="12" r="8.5" /><circle cx="12" cy="12" r="3.5" /><path d="M12 3.5v3M12 17.5v3M3.5 12h3M17.5 12h3" /></>,
+  grid: <><rect x="4" y="4" width="6.5" height="6.5" rx="1" /><rect x="13.5" y="4" width="6.5" height="6.5" rx="1" /><rect x="4" y="13.5" width="6.5" height="6.5" rx="1" /><rect x="13.5" y="13.5" width="6.5" height="6.5" rx="1" /></>,
+  chart: <><path d="M4 20V10M10 20V4M16 20v-7M21 20H3.5" /></>,
+  archive: <><rect x="3.5" y="4" width="17" height="4.5" rx="1" /><path d="M5.5 8.5V19a1 1 0 0 0 1 1h11a1 1 0 0 0 1-1V8.5M10 12.5h4" /></>,
+  link: <><path d="M9.5 14.5 14.5 9.5" /><path d="M7.5 12 5 14.5a3.2 3.2 0 0 0 4.5 4.5L12 16.5" /><path d="M16.5 12 19 9.5A3.2 3.2 0 0 0 14.5 5L12 7.5" /></>,
+  graph: <><circle cx="6" cy="6" r="2.5" /><circle cx="18" cy="7" r="2.5" /><circle cx="12" cy="18" r="2.5" /><path d="M8 7.2 15.5 7M7 8.2l3.7 7.5M16.8 9.2l-3.4 6.5" /></>,
+  puzzle: <><path d="M9 4h6v3.5a2 2 0 1 0 0 4V15H9v-3.5a2 2 0 1 1 0-4V4Z" transform="rotate(0 12 9.5)" /><path d="M4 15h5v3.5a1.8 1.8 0 1 0 3.6 0V15H20v-5h-3.5" /></>,
+  rules: <><rect x="5" y="3.5" width="14" height="17" rx="1.5" /><path d="M8.5 8h7M8.5 12h7M8.5 16h4.5" /></>,
+  settings: <><path d="M4 7.5h9M17 7.5h3M4 16.5h3M11 16.5h9" /><circle cx="15" cy="7.5" r="2.2" /><circle cx="9" cy="16.5" r="2.2" /></>,
+};
+
+function NavIcon({ name }) {
+  return (
+    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor"
+      strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      {ICON_PATHS[name] || ICON_PATHS.grid}
+    </svg>
+  );
+}
+
 const NAV = [
   { title: "创作", items: [
-    { label: "首页", view: "home", icon: "🏠" },
-    { label: "AI 助手", view: "assistant", icon: "💬" },
-    { label: "章节与账本", view: "workspace", icon: "📚" },
-    { label: "任务中心", view: "tasks", icon: "🎯" },
+    { label: "首页", view: "home", icon: "home" },
+    { label: "AI 助手", view: "assistant", icon: "chat" },
+    { label: "章节与账本", view: "workspace", icon: "book" },
+    { label: "任务中心", view: "tasks", icon: "target" },
   ] },
   { title: "资产", items: [
-    { label: "模板库", view: "templates", icon: "🗂" },
-    { label: "用量统计", view: "usage", icon: "📊" },
-    { label: "快照底账", view: "snapshots", icon: "🗄" },
-    { label: "伏笔账本", view: "foreshadow", icon: "🔗" },
-    { label: "图谱与文风", view: "graph", icon: "🕸" },
+    { label: "模板库", view: "templates", icon: "grid" },
+    { label: "用量统计", view: "usage", icon: "chart" },
+    { label: "快照底账", view: "snapshots", icon: "archive" },
+    { label: "伏笔账本", view: "foreshadow", icon: "link" },
+    { label: "图谱与文风", view: "graph", icon: "graph" },
   ] },
   { title: "系统", items: [
-    { label: "技能中心", view: "plugins", icon: "🧩" },
-    { label: "提示词管理", view: "rules", icon: "📝" },
-    { label: "设置", view: "settings", icon: "⚙" },
+    { label: "技能中心", view: "plugins", icon: "puzzle" },
+    { label: "提示词管理", view: "rules", icon: "rules" },
+    { label: "设置", view: "settings", icon: "settings" },
   ] },
 ];
 
@@ -90,7 +115,12 @@ export default function App() {
     <div className="flex min-h-screen flex-col">
       {/* 顶栏：渐变底 + 细边。左上角 = logo 块 + 双行标题 + 版本徽章 + GitHub 链接 */}
       <header className="topbar-grad sticky top-0 z-30 flex h-14 items-center gap-3 px-4 text-topbarfg">
-        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-topbarfg/15 text-[17px] shadow-sm">📖</span>
+        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-topbarfg/15 shadow-sm">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M4 5h7a2 2 0 0 1 2 2v13a2.5 2.5 0 0 0-2.5-2H4V5Z" />
+            <path d="M20 5h-7a2 2 0 0 0-2 2v13a2.5 2.5 0 0 1 2.5-2H20V5Z" />
+          </svg>
+        </span>
         <div className="leading-tight">
           <div className="flex items-center gap-1.5">
             <span className="text-[15px] font-extrabold tracking-wide">AI 小说创作工作台</span>
@@ -116,8 +146,11 @@ export default function App() {
         {/* 任务通知铃铛 */}
         <div className="relative">
           <button onClick={() => { setBellOpen((o) => !o); if (!bellOpen) markSeen(); }}
-            className="relative rounded-lg bg-topbarfg/10 px-2.5 py-1 text-[13px] transition hover:bg-topbarfg/20" title="任务通知">
-            🔔
+            className="relative rounded-lg bg-topbarfg/10 px-2.5 py-1.5 transition hover:bg-topbarfg/20" title="任务通知">
+            <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M6 9.5a6 6 0 0 1 12 0c0 5 2 6 2 6H4s2-1 2-6Z" />
+              <path d="M10 19.5a2.2 2.2 0 0 0 4 0" />
+            </svg>
             {unseenCount > 0 && (
               <span className="absolute -right-0.5 -top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-err px-1 text-[10px] font-bold text-white">
                 {unseenCount > 9 ? "9+" : unseenCount}
@@ -175,7 +208,7 @@ export default function App() {
                         ? "bg-brandbg font-bold text-ink"
                         : "text-inksoft hover:bg-paper hover:text-ink"}`}>
                     {it.view === view && <span className="absolute left-0 top-1/2 h-4 w-[3px] -translate-y-1/2 rounded-full bg-accent" />}
-                    <span className="w-5 shrink-0 text-center text-[14px]">{it.icon}</span>
+                    <span className="flex w-5 shrink-0 items-center justify-center"><NavIcon name={it.icon} /></span>
                     {!collapsed && <span className="truncate">{it.label}</span>}
                   </div>
                 ))}

@@ -106,10 +106,12 @@ def post_settings_test(h, params):
     srv = _server()
     cfg = srv.live_env()
     try:
+        # max_tokens 给足 + 正常探测语：agnes 带推理，预算太小或 system 只给 "ping"
+        # 都会只出思考不出正文（实测 sample 返回空）
         answer = srv.llm_chat([
-            {"role": "system", "content": "ping"},
-            {"role": "user", "content": "ping"},
-        ], max_tokens=4, action="连通测试")
+            {"role": "system", "content": "你是连通性探测器，用一句短中文回复即可。"},
+            {"role": "user", "content": "请回复：连接正常"},
+        ], max_tokens=400, action="连通测试")
         api_ok(h, {"ok": True, "sample": answer, "model": cfg["model"]})
     except Exception as e:
         # 脱敏：只回异常类型名，不透传原始异常（可能含 URL/key 等内部细节）
